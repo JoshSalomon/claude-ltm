@@ -1,0 +1,61 @@
+{
+  "version": 1,
+  "memories": {
+    "mem_14b90308": {
+      "topic": "command / skill duplication issue",
+      "tags": [
+        "claude-code",
+        "configuration",
+        "debugging"
+      ],
+      "phase": 0,
+      "difficulty": 0.5,
+      "created_at": "2026-01-29T12:48:07.089610+00:00"
+    },
+    "mem_4938ac0a": {
+      "topic": "IPv6 localhost curl connection reset fix",
+      "tags": [
+        "networking",
+        "curl",
+        "ipv6",
+        "ipv4",
+        "localhost",
+        "container",
+        "debugging"
+      ],
+      "phase": 0,
+      "difficulty": 0.6,
+      "created_at": "2026-02-01T14:17:22.069764+00:00"
+    }
+  },
+  "tag_index": {
+    "claude-code": [
+      "mem_14b90308"
+    ],
+    "configuration": [
+      "mem_14b90308"
+    ],
+    "debugging": [
+      "mem_14b90308",
+      "mem_4938ac0a"
+    ],
+    "networking": [
+      "mem_4938ac0a"
+    ],
+    "curl": [
+      "mem_4938ac0a"
+    ],
+    "ipv6": [
+      "mem_4938ac0a"
+    ],
+    "ipv4": [
+      "mem_4938ac0a"
+    ],
+    "localhost": [
+      "mem_4938ac0a"
+    ],
+    "container": [
+      "mem_4938ac0a"
+    ]
+  }
+}

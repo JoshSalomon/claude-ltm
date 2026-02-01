@@ -1,0 +1,25 @@
+# Git-ignored volatile data
+# These files contain session-specific state that should not be versioned
+
+# Volatile access statistics (access_count, priority, accessed_at)
+stats.json
+
+# Session state (session counter, current session data, config)
+state.json
+
+# Container configuration (project-specific, created by setup.sh)
+server.json
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor swap files
+*.swp
+*.swo
+*~
+
+# Virtual environment (if created locally)
+venv/
+.venv/
