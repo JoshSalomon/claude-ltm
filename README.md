@@ -4,17 +4,17 @@
 [![Container](https://img.shields.io/badge/container-quay.io-red.svg)](https://quay.io/repository/jsalomon/ltm-mcp-server)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
-A persistent memory system for [Claude Code](https://claude.ai/code) that enables Claude to remember important information across sessions. Built with a hybrid hooks + MCP server architecture.
+A persistent memory system for [Claude Code](https://claude.ai/code) that enables Claude to remember important information across sessions. Built as a Claude Code plugin with container-based deployment.
 
 ## Features
 
 - **Automatic Context Loading** - Top memories are loaded at session start
-- **On-Demand Storage** - Store important learnings with `/remember`
-- **Semantic Search** - Find memories by keyword with `/recall`
+- **On-Demand Storage** - Store important learnings with `/ltm:remember`
+- **Semantic Search** - Find memories by keyword with `/ltm:recall`
 - **Smart Eviction** - Graceful degradation through phases (Full → Hint → Abstract → Removed)
 - **Difficulty Tracking** - Memories from challenging tasks are prioritized
 - **Git-Friendly** - Human-readable markdown files with YAML frontmatter
-- **Integrity Tools** - Check and fix system health with `/ltm check` and `/ltm fix`
+- **Integrity Tools** - Check and fix system health with `/ltm:check` and `/ltm:fix`
 - **Extended Thinking Integration** - Automatically consults memory in "think harder" and "ultrathink" modes
 
 ## Quick Start
@@ -23,195 +23,80 @@ A persistent memory system for [Claude Code](https://claude.ai/code) that enable
 
 - [Claude Code CLI](https://claude.ai/code) installed
 - Podman or Docker
-- `curl`, `jq` (usually pre-installed on Linux/macOS)
-- `socat` or `nc` (for MCP connection)
 
-### One-Line Installation (Recommended)
+### Installation
 
-Run this in your project directory:
+Install LTM as a Claude Code plugin directly from GitHub:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/JoshSalomon/claude-ltm/main/.claude/ltm/setup.sh | bash
+# Add the LTM marketplace
+claude plugin marketplace add https://github.com/JoshSalomon/claude-ltm.git
+
+# Install the plugin
+claude plugin install ltm@claude-ltm
+
+# Enable extended thinking integration (run inside Claude Code)
+# This adds memory consultation instructions to your project's CLAUDE.md
+/ltm:init
 ```
 
-This script automatically:
-1. Creates a project-specific container with unique name and ports
-2. Pulls the LTM container image from `quay.io/jsalomon/ltm-mcp-server`
-3. Registers MCP with Claude Code
-4. Configures hooks to use the container's HTTP endpoints
-5. Downloads slash commands (`/remember`, `/recall`, `/forget`, `/ltm`)
-6. Starts the container
+The plugin automatically:
+- Runs an ephemeral container for each Claude Code session
+- Registers the MCP server for memory tools
+- Provides slash commands (`/ltm:remember`, `/ltm:recall`, `/ltm:forget`, `/ltm:status`, etc.)
 
-**That's it!** Restart Claude Code and you're ready to use LTM.
+The `/ltm:init` command enables:
+- **Proactive memory search** before debugging and implementing features
+- **Extended thinking consultation** that automatically searches memories during complex reasoning
 
-**After running the setup script, start Claude Code and run `/ltm init`** to configure hooks and update CLAUDE.md.
+### Updating the Plugin
+
+```bash
+claude plugin update ltm@claude-ltm
+```
+
+### Uninstalling
+
+```bash
+claude plugin uninstall ltm@claude-ltm
+claude plugin marketplace remove claude-ltm
+```
 
 ### What Gets Created
 
+Memory data is stored in your project's `.claude/ltm/` directory:
+
 ```
-.claude/
-├── ltm/
-│   ├── server.json         # Container config (name, ports) - git-ignored
-│   ├── ltm-start.sh        # Start container + connect MCP (used by Claude Code)
-│   ├── ltm-stop.sh         # Stop container (run from terminal when done)
-│   ├── index.json          # Memory index - git-tracked
-│   ├── memories/           # Memory files - git-tracked
-│   └── archives/           # Archived content - git-tracked
-├── commands/               # Slash commands
-│   ├── remember.md
-│   ├── recall.md
-│   ├── forget.md
-│   └── ltm.md
-└── settings.local.json     # Hooks configuration (created by /ltm init)
+your-project/
+└── .claude/
+    └── ltm/
+        ├── index.json          # Memory index - git-tracked
+        ├── stats.json          # Access statistics - git-ignored
+        ├── state.json          # Session state - git-ignored
+        ├── memories/           # Memory files - git-tracked
+        │   └── mem_abc123.md
+        └── archives/           # Archived content - git-tracked
 ```
 
-### Container Management
+### Container Model
 
-Each project gets a unique container name (based on directory hash) to avoid conflicts.
-
-**Container starts automatically** when Claude Code connects via MCP.
-
-**To stop the container** (from terminal, when Claude Code is closed):
-```bash
-bash .claude/ltm/ltm-stop.sh
-```
-
-**Other commands:**
-```bash
-# View container config
-cat .claude/ltm/server.json
-
-# View logs
-podman logs ltm-<your-hash>
-
-# Inside Claude Code
-/ltm start    # Start container
-/ltm stop     # Stop container
-```
+The MCP server runs in an **ephemeral container** using stdio transport:
+- A new container starts when Claude Code connects
+- The container is automatically removed when the session ends (`--rm` flag)
+- Container names are randomly generated by podman/docker
+- No persistent container management required
 
 ### Git Configuration
 
-The setup script adds these to `.gitignore`:
+Add these to your project's `.gitignore`:
 ```
 .claude/ltm/stats.json
 .claude/ltm/state.json
-.claude/ltm/server.json
 ```
 
 Memories (`.claude/ltm/memories/` and `.claude/ltm/index.json`) are git-tracked for team sharing.
 
 ---
-
-## Alternative Installation Methods
-
-> **Important:** LTM source code should NOT be copied into your projects. Only the memory data directory (`.claude/ltm/`) and slash commands (`.claude/commands/`) are created in your project.
-
-### Option 1: Build Container Locally
-
-For users who want to audit the code before running, or don't trust pre-built images.
-
-```bash
-# One-time: Clone and build the container
-git clone https://github.com/JoshSalomon/claude-ltm.git
-cd claude-ltm
-export LTM_HOME=$(pwd)
-podman build -t ltm-mcp-server .claude/ltm/
-
-# Add to shell profile for persistence
-echo "export LTM_HOME=$LTM_HOME" >> ~/.bashrc  # or ~/.zshrc
-
-# Per project: Run the local setup script
-cd /path/to/your/project
-bash $LTM_HOME/.claude/ltm/setup-local.sh
-
-# In Claude Code, run: /ltm init
-```
-
-This uses your locally-built container instead of the pre-built image from quay.io.
-
-### Option 2: Development Mode (Direct Python)
-
-For LTM developers or users who want maximum control. Runs the MCP server directly with Python without containerization.
-
-```bash
-# One-time: Clone and set up environment
-git clone https://github.com/JoshSalomon/claude-ltm.git
-cd claude-ltm
-export LTM_HOME=$(pwd)
-echo "export LTM_HOME=$LTM_HOME" >> ~/.bashrc  # or ~/.zshrc
-
-# Set up Python environment
-python -m venv .venv
-source .venv/bin/activate
-pip install -r .claude/ltm/requirements.txt
-
-# Per project: Configure to use this LTM installation
-cd /path/to/your/project
-mkdir -p .claude/ltm/{memories,archives} .claude/commands
-
-# Copy slash commands
-cp $LTM_HOME/.claude/commands/*.md .claude/commands/
-
-# Register MCP with --data-path pointing to your project
-claude mcp add --transport stdio ltm -- \
-  $LTM_HOME/.venv/bin/python $LTM_HOME/.claude/ltm/mcp_server.py \
-  --data-path "$(pwd)/.claude/ltm"
-```
-
-**Pros:**
-- Full visibility into code execution
-- Easy to debug and modify
-- No container overhead
-
-**Cons:**
-- Requires Python 3.11+ on host
-- Must manage Python dependencies
-- Hooks require separate setup (see below)
-
-**Note:** In development mode, hooks run via Python scripts. Copy the hook scripts and configure them in `.claude/settings.local.json`, or run `/ltm init` after setting up HTTP endpoints manually.
-
-### Trust Considerations
-
-| Method | Trust Level | Use When |
-|--------|-------------|----------|
-| Pre-built container | Trust quay.io/jsalomon | Quick setup, don't need to audit code |
-| Local container build | Audit before build | Want to review code, security-conscious |
-| Development mode | Full control | Contributing to LTM, debugging issues |
-
-### Hooks Configuration
-
-The recommended installation uses HTTP hooks that communicate with the container. The setup script configures these automatically in `.claude/settings.local.json`:
-
-```json
-{
-  "hooks": {
-    "SessionStart": [
-      {
-        "matcher": "",
-        "hooks": [{"type": "command", "command": "curl -s -X POST http://127.0.0.1:<HOOKS_PORT>/hook/session_start"}]
-      }
-    ],
-    "PostToolUse": [
-      {
-        "matcher": "",
-        "hooks": [{"type": "command", "command": "curl -s -X POST http://127.0.0.1:<HOOKS_PORT>/hook/track_difficulty"}]
-      }
-    ],
-    "PreCompact": [
-      {
-        "matcher": "",
-        "hooks": [{"type": "command", "command": "curl -s -X POST http://127.0.0.1:<HOOKS_PORT>/hook/pre_compact"}]
-      }
-    ],
-    "SessionEnd": [
-      {
-        "matcher": "",
-        "hooks": [{"type": "command", "command": "curl -s -X POST http://127.0.0.1:<HOOKS_PORT>/hook/session_end"}]
-      }
-    ]
-  }
-}
-```
 
 ## Usage
 
@@ -219,39 +104,36 @@ The recommended installation uses HTTP hooks that communicate with the container
 
 | Command | Description |
 |---------|-------------|
-| `/remember` | Store a memory interactively |
-| `/remember <topic>` | Store a memory with the given topic |
-| `/recall <query>` | Search memories by keyword |
-| `/forget <id>` | Delete a memory by ID |
-| `/ltm` | Show system status |
-| `/ltm help` | Show command summary |
-| `/ltm init` | Add proactive memory instructions to CLAUDE.md |
-| `/ltm list` | List all memories |
-| `/ltm list --tag <tag>` | List memories with specific tag |
-| `/ltm list --phase <n>` | List memories by eviction phase (0-2) |
-| `/ltm check` | Check system integrity |
-| `/ltm fix` | Fix integrity issues |
-| `/ltm fix --clean-archives` | Fix issues and remove orphaned archives |
-| `/ltm start` | Start persistent LTM container |
-| `/ltm stop` | Stop persistent LTM container |
+| `/ltm:init` | Add LTM integration instructions to project's CLAUDE.md |
+| `/ltm:remember` | Store a memory interactively |
+| `/ltm:remember <topic>` | Store a memory with the given topic |
+| `/ltm:recall <query>` | Search memories by keyword |
+| `/ltm:forget <id>` | Delete a memory by ID |
+| `/ltm:status` | Show system status |
+| `/ltm:help` | Show command summary |
+| `/ltm:list` | List all memories |
+| `/ltm:list --tag <tag>` | List memories with specific tag |
+| `/ltm:check` | Check system integrity |
+| `/ltm:fix` | Fix integrity issues |
+| `/ltm:fix --clean-archives` | Fix issues and remove orphaned archives |
 
 ### Examples
 
 ```bash
 # Store a debugging solution
-/remember Fix for authentication timeout
+/ltm:remember Fix for authentication timeout
 
 # Search for database-related memories
-/recall database
+/ltm:recall database
 
 # List all memories tagged with "api"
-/ltm list --tag api
+/ltm:list --tag api
 
 # Check system health
-/ltm check
+/ltm:check
 
 # Fix any integrity issues
-/ltm fix
+/ltm:fix
 ```
 
 ### MCP Tools
@@ -269,53 +151,51 @@ The LTM MCP server provides these tools (usable directly or via slash commands):
 | `ltm_check` | - | Check integrity |
 | `ltm_fix` | `archive_orphans?`, `clean_orphaned_archives?` | Fix integrity issues |
 
-## Proactive Memory Usage
-
-By default, only the top 10 memories are loaded at session start. To enable Claude to proactively search for relevant memories when debugging or implementing features, run:
-
-```bash
-/ltm init
-```
-
-This adds instructions to your project's `CLAUDE.md` that tell Claude to:
-- Search for prior solutions before debugging errors
-- Check for related patterns before implementing features
-- Store solutions after solving difficult problems
-
-**What gets added to CLAUDE.md:**
-
-```markdown
-## Proactive Memory Usage
-
-When working on tasks, proactively search for relevant memories:
-
-- **Before debugging**: Use `mcp__ltm__recall` to search for prior solutions
-- **Before implementing features**: Search for related patterns or past decisions
-- **When encountering familiar problems**: Check if there's a stored solution
-
-After solving a difficult problem, use `mcp__ltm__store_memory` to save the solution. Always notify the user when a memory is stored.
-
-## Extended Thinking Memory Consultation
-
-**IMPORTANT**: When operating in extended thinking modes ("think harder" or "ultrathink"),
-you MUST consult long-term memory as part of your reasoning process:
-
-1. At the start of extended thinking: Search for memories related to the current task
-2. During analysis: Reference any relevant memories found to inform your approach
-3. Before finalizing: Check if similar problems were solved before and what worked
-```
+---
 
 ## Architecture
 
-### Hybrid Approach
+### Plugin Structure
 
-- **Hooks** (Python scripts): Handle automatic operations during session lifecycle
-  - `SessionStart`: Load top memories into context
-  - `PostToolUse`: Track task difficulty based on tool success/failure
-  - `PreCompact`: Save state before context compaction
-  - `SessionEnd`: Persist changes and run eviction
+```
+claude-ltm/                 # Plugin root
+├── .claude-plugin/
+│   └── plugin.json         # Plugin manifest
+├── .mcp.json               # MCP server configuration
+├── hooks/
+│   ├── hooks.json          # Hook definitions
+│   ├── session_start.sh    # Load memories on session start
+│   ├── post_tool_use.sh    # Track difficulty
+│   ├── pre_compact.sh      # Save state before compaction
+│   └── session_end.sh      # Persist and run eviction
+├── commands/               # Slash commands
+│   ├── remember.md
+│   ├── recall.md
+│   ├── forget.md
+│   ├── status.md
+│   ├── list.md
+│   ├── check.md
+│   ├── fix.md
+│   └── help.md
+├── server/                 # Container source
+│   ├── mcp_server.py
+│   ├── store.py
+│   ├── priority.py
+│   ├── eviction.py
+│   └── requirements.txt
+├── scripts/
+│   └── run-mcp.sh          # Container launcher
+├── Dockerfile
+├── README.md
+└── LICENSE
+```
 
-- **MCP Server** (Python): Exposes tools for on-demand memory operations
+### Deployment Model
+
+- **Ephemeral containers**: A new container starts for each Claude Code session and is removed when the session ends
+- **Stdio transport**: MCP communication uses standard input/output (not TCP)
+- **Data persistence**: Memory data is stored in the project's `.claude/ltm/` directory, which is mounted into the container
+- **No port mapping**: Since stdio is used, no network ports are exposed
 
 ### Storage Structure
 
@@ -413,7 +293,7 @@ The LTM system is designed for GitOps workflows and multi-user collaboration:
 
 ```bash
 # User A stores a memory
-/remember Fix for database timeout
+/ltm:remember Fix for database timeout
 
 # User A commits and pushes
 git add .claude/ltm/memories/ .claude/ltm/index.json
@@ -443,10 +323,6 @@ If you get a merge conflict in `index.json`, here's how to resolve it:
   "memories": {
     "mem_abc123": { "topic": "...", "tags": [...], "phase": 0 },
     "mem_def456": { "topic": "...", "tags": [...], "phase": 0 }
-  },
-  "tags": {
-    "database": ["mem_abc123"],
-    "api": ["mem_def456"]
   }
 }
 ```
@@ -455,9 +331,7 @@ If you get a merge conflict in `index.json`, here's how to resolve it:
 
 1. **Keep all memories from both sides** - Each memory has a unique ID (`mem_XXXXXXXX`). Include all memory entries from both versions.
 
-2. **Merge the tags index** - For each tag, combine the memory ID arrays from both sides. Remove duplicates.
-
-3. **Verify memory files exist** - Each memory ID in `index.json` should have a corresponding `.claude/ltm/memories/mem_XXXXXXXX.md` file.
+2. **Verify memory files exist** - Each memory ID in `index.json` should have a corresponding `.claude/ltm/memories/mem_XXXXXXXX.md` file.
 
 **Example conflict resolution:**
 ```json
@@ -479,7 +353,9 @@ If you get a merge conflict in `index.json`, here's how to resolve it:
   }
 ```
 
-**After resolving:** Run `/ltm check` in Claude Code to verify integrity, and `/ltm fix` if needed.
+**After resolving:** Run `/ltm:check` in Claude Code to verify integrity, and `/ltm:fix` if needed.
+
+---
 
 ## Configuration
 
@@ -501,91 +377,104 @@ Configuration is stored in `.claude/ltm/state.json`:
 | `memories_to_load` | 10 | Memories loaded at session start |
 | `eviction_batch_size` | 10 | Memories processed per eviction cycle |
 
+---
+
 ## Development
 
-### Building the Container
+### Local Plugin Development
 
-To build the container image locally:
+For contributing or testing changes locally:
 
 ```bash
-# Build the container image
-podman build -t ltm-mcp-server .claude/ltm/
+# Clone the repository
+git clone https://github.com/JoshSalomon/claude-ltm.git
+cd claude-ltm
 
-# Register with Claude Code
-claude mcp add --transport stdio ltm -- podman run -i --rm --userns=keep-id -v "$(pwd)/.claude/ltm:/data:Z" ltm-mcp-server
+# Run Claude Code with the local plugin
+claude --plugin-dir .
+```
+
+### Building the Container Locally
+
+```bash
+# Build from repo root
+podman build -t quay.io/jsalomon/ltm-mcp-server:latest .
+
+# Or with docker
+docker build -t quay.io/jsalomon/ltm-mcp-server:latest .
 ```
 
 ### Running Tests
 
 ```bash
-# Activate virtual environment
-source .claude/ltm/venv/bin/activate
+# Set up Python environment
+python -m venv .venv
+source .venv/bin/activate
+pip install -r server/requirements.txt
+pip install pytest pytest-cov pytest-asyncio
 
-# Run all tests
+# Run tests
 pytest .claude/ltm/tests/
 
 # Run with coverage
-pytest .claude/ltm/tests/ --cov=.claude/ltm --cov-report=term-missing
-
-# Run specific test file
-pytest .claude/ltm/tests/test_store.py -v
+pytest .claude/ltm/tests/ --cov=server --cov-report=term-missing
 ```
 
 ### Project Structure
 
 ```
-.claude/
-├── ltm/                      # LTM source code (for developers)
-│   ├── docs/
-│   │   ├── PRD.md           # Product Requirements
-│   │   ├── TESTING.md       # Testing Strategy
-│   │   └── ARCHITECTURE.md  # Technical Design
-│   ├── tests/
-│   │   ├── test_store.py
-│   │   ├── test_mcp_server.py
-│   │   ├── test_eviction.py
-│   │   ├── test_hooks.py
-│   │   └── test_priority.py
-│   ├── store.py             # Core storage operations
-│   ├── priority.py          # Priority calculation
-│   ├── eviction.py          # Phased eviction
-│   ├── mcp_server.py        # MCP tool definitions
-│   ├── requirements.txt
-│   └── Dockerfile
-├── ltm_hooks/                # Hook scripts (for users)
-│   ├── session_start.py
-│   ├── track_difficulty.py
-│   ├── pre_compact.py
-│   └── session_end.py
-├── commands/
-│   ├── remember.md
-│   ├── recall.md
-│   ├── forget.md
-│   └── ltm.md
-└── settings.local.json      # Hooks configuration
+claude-ltm/
+├── .claude-plugin/           # Plugin manifest
+├── server/                   # MCP server source
+│   ├── mcp_server.py
+│   ├── store.py
+│   ├── priority.py
+│   ├── eviction.py
+│   └── requirements.txt
+├── hooks/                    # Hook scripts
+│   ├── hooks.json
+│   └── *.sh
+├── commands/                 # Slash commands
+│   └── *.md
+├── scripts/                  # Utility scripts
+│   └── run-mcp.sh
+├── docs/                     # Documentation
+│   ├── ARCHITECTURE.md
+│   ├── PRD.md
+│   └── TESTING.md
+├── Dockerfile
+└── README.md
 ```
+
+---
 
 ## Troubleshooting
 
 ### MCP Server Not Responding
 
-```bash
-# Check if MCP server is registered
-claude mcp list
+The MCP server runs in an ephemeral container. If it's not responding:
 
-# Re-register the server
-claude mcp remove ltm
-claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
+```bash
+# Check if the container image exists
+podman images | grep ltm-mcp-server
+
+# Pull the latest image
+podman pull quay.io/jsalomon/ltm-mcp-server:latest
+
+# Test the container manually
+echo '{}' | podman run -i --rm --userns=keep-id \
+  -v "$(pwd)/.claude/ltm:/data:Z" \
+  quay.io/jsalomon/ltm-mcp-server:latest
 ```
 
 ### Integrity Issues
 
 ```bash
 # In Claude Code, check for issues
-/ltm check
+/ltm:check
 
 # Fix any issues found
-/ltm fix
+/ltm:fix
 ```
 
 ### Container Permission Errors
@@ -593,8 +482,9 @@ claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
 If using podman and encountering permission errors:
 
 ```bash
-# Use --userns=keep-id flag
-podman run -i --rm --userns=keep-id -v "$(pwd)/.claude/ltm:/data:Z" ltm-mcp-server
+# The run-mcp.sh script uses --userns=keep-id automatically
+# If running manually, include this flag:
+podman run -i --rm --userns=keep-id -v "$(pwd)/.claude/ltm:/data:Z" quay.io/jsalomon/ltm-mcp-server:latest
 ```
 
 ### Reset LTM Data
@@ -602,7 +492,7 @@ podman run -i --rm --userns=keep-id -v "$(pwd)/.claude/ltm:/data:Z" ltm-mcp-serv
 To completely reset the LTM system:
 
 ```bash
-# Remove all memories and state (keeps configuration)
+# Remove all memories and state
 rm -rf .claude/ltm/memories/*
 rm -rf .claude/ltm/archives/*
 rm -f .claude/ltm/index.json
@@ -610,13 +500,15 @@ rm -f .claude/ltm/stats.json
 rm -f .claude/ltm/state.json
 ```
 
+---
+
 ## Contributing
 
-Contributions are welcome! Please read the documentation in `.claude/ltm/docs/` before contributing.
+Contributions are welcome! Please read the documentation in `docs/` before contributing.
 
 ## License
 
-This project is open source. See LICENSE file for details.
+Apache 2.0. See LICENSE file for details.
 
 ## Links
 

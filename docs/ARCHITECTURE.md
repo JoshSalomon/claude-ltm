@@ -1,12 +1,12 @@
 # Long-Term Memory (LTM) System - Architecture Document
 
-**Version: 1.1.0 | Last Updated: 2026-02-01**
+**Version: 1.3.0 | Last Updated: 2026-02-02**
 
 ---
 
 ## 1. System Overview
 
-The LTM system enables Claude Code to maintain persistent memory across sessions using a hybrid hooks + MCP server architecture.
+The LTM system enables Claude Code to maintain persistent memory across sessions. Distributed as a Claude Code plugin, it uses a hybrid hooks + MCP server architecture with containerized deployment.
 
 ### 1.1 High-Level Architecture
 
@@ -15,34 +15,53 @@ The LTM system enables Claude Code to maintain persistent memory across sessions
 │                           Claude Code Session                           │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
-│  ┌──────────────┐     ┌──────────────────────────────────────────────┐  │
-│  │    Hooks     │     │              MCP Server                      │  │
-│  │  (Python)    │     │              (Python)                        │  │
-│  ├──────────────┤     ├──────────────────────────────────────────────┤  │
-│  │SessionStart  │────>│ store_memory  │ recall      │ list_memories  │  │
-│  │PostToolUse   │     │ get_memory    │ forget      │ ltm_status     │  │
-│  │PreCompact    │     └───────────────┴─────────────┴────────────────┘  │
-│  │SessionEnd    │                       │                               │
-│  └──────────────┘                       │                               │
-│         │                               │                               │
-└─────────┼───────────────────────────────┼───────────────────────────────┘
-          │                               │
-          ▼                               ▼
+│  ┌──────────────────┐                                                   │
+│  │  Hook Scripts    │                                                   │
+│  │  (shell + curl)  │                                                   │
+│  ├──────────────────┤                                                   │
+│  │ session_start.sh │──┐                                                │
+│  │ post_tool_use.sh │  │                                                │
+│  │ pre_compact.sh   │  │  HTTP POST                                     │
+│  │ session_end.sh   │  │  127.0.0.1:PORT                                │
+│  └──────────────────┘  │                                                │
+│                        │                                                │
+└────────────────────────┼────────────────────────────────────────────────┘
+                         │
+                         ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          Storage Layer                                  │
-├──────────────────┬────────────────────┬─────────────────────────────────┤
-│    store.py      │    priority.py     │          eviction.py            │
-│   (CRUD ops)     │   (scoring)        │    (phase transitions)          │
-└──────────────────┴────────────────────┴─────────────────────────────────┘
-          │
-          ▼
+│                      Container (podman/docker)                          │
+├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  ┌───────────────────┐    ┌──────────────────────────────────────────┐  │
+│  │  Hooks Server     │    │              MCP Server                  │  │
+│  │  (Flask/HTTP)     │    │              (stdio)                     │  │
+│  ├───────────────────┤    ├──────────────────────────────────────────┤  │
+│  │/hook/session_start│    │ store_memory  │ recall    │ list_memories│  │
+│  │/hook/post_tool_use│    │ get_memory    │ forget    │ ltm_status   │  │
+│  │/hook/pre_compact  │    │ ltm_check     │ ltm_fix   │              │  │
+│  │/hook/session_end  │    └───────────────┴───────────┴──────────────┘  │
+│  └───────────────────┘                      │                           │
+│         │                                   │                           │
+│         └───────────────┬───────────────────┘                           │
+│                         ▼                                               │
+│  ┌──────────────────────────────────────────────────────────────────┐   │
+│  │                      Storage Layer                               │   │
+│  ├──────────────────┬────────────────────┬──────────────────────────┤   │
+│  │    store.py      │    priority.py     │       eviction.py        │   │
+│  │   (CRUD ops)     │   (scoring)        │   (phase transitions)    │   │
+│  └──────────────────┴────────────────────┴──────────────────────────┘   │
+│                         │                                               │
+└─────────────────────────┼───────────────────────────────────────────────┘
+                          │ (volume mount)
+                          ▼
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                          File System                                    │
+│                          File System (host)                             │
 ├─────────────────────────────────────────────────────────────────────────┤
 │  .claude/ltm/                                                           │
 │  ├── index.json       (git-tracked)   Lightweight lookup index          │
 │  ├── stats.json       (git-ignored)   Volatile access statistics        │
 │  ├── state.json       (git-ignored)   Session state and config          │
+│  ├── server.json      (git-ignored)   Container connection info         │
 │  ├── memories/        (git-tracked)   Memory files (markdown + YAML)    │
 │  └── archives/        (git-tracked)   Archived content from eviction    │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -385,51 +404,244 @@ if __name__ == "__main__":
     asyncio.run(server.run())
 ```
 
-**MCP Registration:**
+**Plugin Distribution:**
+
+The MCP server is distributed as part of the Claude Code plugin and runs in an ephemeral container:
 
 ```bash
-# Local development
-claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
+# Installation from GitHub
+claude plugin marketplace add https://github.com/JoshSalomon/claude-ltm.git
+claude plugin install ltm@claude-ltm
 
-# Containerized production
-claude mcp add --transport stdio ltm -- docker run -i --rm \
-  -v "$(pwd)/.claude/ltm:/data" ltm-mcp-server
+# The plugin configures MCP automatically via .mcp.json
 ```
 
 ### 2.3 Hooks
 
-All hooks read JSON from stdin and write to stdout/stderr.
+Hooks are defined in `hooks/hooks.json` and auto-loaded by the plugin system. The hooks use a **shell script + HTTP** architecture where shell scripts invoke HTTP endpoints on the running container.
 
-#### session_start.py
+#### Architecture Overview
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                        Claude Code                                   │
+├─────────────────────────────────────────────────────────────────────┤
+│                                                                     │
+│  Hook Event (e.g., SessionStart)                                    │
+│         │                                                           │
+│         ▼                                                           │
+│  ┌─────────────────────┐                                            │
+│  │  hooks/hooks.json   │  Defines which shell script to run        │
+│  └──────────┬──────────┘                                            │
+│             │                                                       │
+│             ▼                                                       │
+│  ┌─────────────────────┐     HTTP POST      ┌────────────────────┐ │
+│  │  session_start.sh   │ ─────────────────> │    Container       │ │
+│  │  (shell script)     │   127.0.0.1:PORT   │  (hooks endpoint)  │ │
+│  └─────────────────────┘                    └────────────────────┘ │
+│                                                      │              │
+│                                                      ▼              │
+│                                             ┌────────────────────┐ │
+│                                             │  Python handlers   │ │
+│                                             │  (store.py, etc.)  │ │
+│                                             └────────────────────┘ │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Why HTTP instead of direct Python execution:**
+- Container isolation: All Python code runs inside the container
+- No local Python dependencies required
+- Hooks can execute quickly (shell + curl)
+- Container handles state management and file access
+
+#### hooks/hooks.json
+
+```json
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session_start.sh"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/post_tool_use.sh"
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/pre_compact.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/session_end.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
+
+#### session_start.sh
+
+```bash
+#!/bin/bash
+# LTM Session Start Hook
+# Loads memories at the start of a Claude Code session
+
+set -e
+
+PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$(pwd)}"
+SERVER_JSON="${PROJECT_ROOT}/.claude/ltm/server.json"
+
+# Check if server.json exists (container is running)
+if [[ ! -f "$SERVER_JSON" ]]; then
+    # No server running, silently exit
+    exit 0
+fi
+
+# Read the hooks port from server.json
+PORT=$(jq -r '.hooks_port // empty' "$SERVER_JSON" 2>/dev/null)
+
+if [[ -z "$PORT" ]]; then
+    exit 0
+fi
+
+# Call the session start endpoint on the container
+# Use 127.0.0.1 explicitly (not localhost) to avoid IPv6 issues
+curl -s -X POST "http://127.0.0.1:${PORT}/hook/session_start" \
+    -H 'Content-Type: application/json' \
+    -d '{}' 2>/dev/null || true
+```
+
+#### post_tool_use.sh
+
+```bash
+#!/bin/bash
+# LTM PostToolUse Hook
+# Tracks tool success/failure for difficulty scoring
+
+set -e
+
+PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$(pwd)}"
+SERVER_JSON="${PROJECT_ROOT}/.claude/ltm/server.json"
+
+if [[ ! -f "$SERVER_JSON" ]]; then
+    exit 0
+fi
+
+PORT=$(jq -r '.hooks_port // empty' "$SERVER_JSON" 2>/dev/null)
+
+if [[ -z "$PORT" ]]; then
+    exit 0
+fi
+
+# Read payload from stdin (Claude Code provides tool info)
+PAYLOAD=$(cat)
+
+# Forward to container's hook endpoint
+curl -s -X POST "http://127.0.0.1:${PORT}/hook/post_tool_use" \
+    -H 'Content-Type: application/json' \
+    -d "$PAYLOAD" 2>/dev/null || true
+```
+
+#### pre_compact.sh
+
+```bash
+#!/bin/bash
+# LTM PreCompact Hook
+# Saves state before context compaction
+
+set -e
+
+PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$(pwd)}"
+SERVER_JSON="${PROJECT_ROOT}/.claude/ltm/server.json"
+
+if [[ ! -f "$SERVER_JSON" ]]; then
+    exit 0
+fi
+
+PORT=$(jq -r '.hooks_port // empty' "$SERVER_JSON" 2>/dev/null)
+
+if [[ -z "$PORT" ]]; then
+    exit 0
+fi
+
+curl -s -X POST "http://127.0.0.1:${PORT}/hook/pre_compact" \
+    -H 'Content-Type: application/json' \
+    -d '{}' 2>/dev/null || true
+```
+
+#### session_end.sh
+
+```bash
+#!/bin/bash
+# LTM Session End Hook
+# Persists state and runs eviction
+
+set -e
+
+PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$(pwd)}"
+SERVER_JSON="${PROJECT_ROOT}/.claude/ltm/server.json"
+
+if [[ ! -f "$SERVER_JSON" ]]; then
+    exit 0
+fi
+
+PORT=$(jq -r '.hooks_port // empty' "$SERVER_JSON" 2>/dev/null)
+
+if [[ -z "$PORT" ]]; then
+    exit 0
+fi
+
+curl -s -X POST "http://127.0.0.1:${PORT}/hook/session_end" \
+    -H 'Content-Type: application/json' \
+    -d '{}' 2>/dev/null || true
+```
+
+#### Container-Side Hook Handlers
+
+The container exposes HTTP endpoints for each hook. The handlers run Python code inside the container:
 
 ```python
-#!/usr/bin/env python3
-# .claude/ltm/hooks/session_start.py
-"""
-Hook: SessionStart
-Trigger: At beginning of Claude Code session
-Action: Load top-N memories into context
-"""
+# Inside container: server/hooks_server.py
 
-import json
-import sys
-from pathlib import Path
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
-
+from flask import Flask, request, jsonify
 from store import MemoryStore
 from priority import PriorityCalculator
+from eviction import EvictionManager
 
-def main():
-    # Read hook payload from stdin
-    payload = json.load(sys.stdin)
-    session_id = payload.get("session_id")
+app = Flask(__name__)
+store = MemoryStore()
 
-    store = MemoryStore()
-    priority_calc = PriorityCalculator()
-
-    # Load state and increment session counter
+@app.route('/hook/session_start', methods=['POST'])
+def session_start():
+    """Load top memories and increment session counter."""
     state = store._read_state()
     state["session_count"] = state.get("session_count", 0) + 1
     state["current_session"] = {
@@ -443,53 +655,20 @@ def main():
     # Get top memories by priority
     config = state.get("config", {})
     limit = config.get("memories_to_load", 10)
+    memories = store.list(limit=limit)
 
-    memories = store.list(limit=limit)  # Already sorted by priority
+    return jsonify({"memories": memories})
 
-    # Output memories for context injection
-    if memories:
-        print("## Loaded Memories\n")
-        for mem in memories:
-            print(f"### {mem['topic']}")
-            print(f"Tags: {', '.join(mem.get('tags', []))}")
-            print(f"Priority: {mem.get('priority', 0):.2f}")
-            print()
-
-if __name__ == "__main__":
-    main()
-```
-
-#### track_difficulty.py (PostToolUse)
-
-```python
-#!/usr/bin/env python3
-# .claude/ltm/hooks/track_difficulty.py
-"""
-Hook: PostToolUse
-Trigger: After each tool invocation
-Action: Track success/failure for difficulty scoring
-"""
-
-import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from store import MemoryStore
-
-def main():
-    payload = json.load(sys.stdin)
-
-    tool_name = payload.get("tool_name")
+@app.route('/hook/post_tool_use', methods=['POST'])
+def post_tool_use():
+    """Track tool success/failure for difficulty scoring."""
+    payload = request.get_json() or {}
     tool_response = payload.get("tool_response", {})
 
-    store = MemoryStore()
     state = store._read_state()
-
     session = state.get("current_session", {})
 
-    # Determine success/failure
-    is_success = not ("error" in tool_response or
+    is_success = not ("error" in str(tool_response) or
                       tool_response.get("success") == False)
 
     if is_success:
@@ -500,84 +679,33 @@ def main():
     state["current_session"] = session
     store._write_state(state)
 
-if __name__ == "__main__":
-    main()
-```
+    return jsonify({"success": True})
 
-#### pre_compact.py
-
-```python
-#!/usr/bin/env python3
-# .claude/ltm/hooks/pre_compact.py
-"""
-Hook: PreCompact
-Trigger: Before context compaction
-Action: Save state, mark compaction
-"""
-
-import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from store import MemoryStore
-
-def main():
-    payload = json.load(sys.stdin)
-
-    store = MemoryStore()
+@app.route('/hook/pre_compact', methods=['POST'])
+def pre_compact():
+    """Mark compaction occurred (adds difficulty bonus)."""
     state = store._read_state()
-
-    # Mark that compaction occurred (adds difficulty bonus)
     session = state.get("current_session", {})
     session["compacted"] = True
     state["current_session"] = session
-
-    # Increment compaction counter
     state["compaction_count"] = state.get("compaction_count", 0) + 1
-
     store._write_state(state)
 
-if __name__ == "__main__":
-    main()
-```
+    return jsonify({"success": True})
 
-#### session_end.py
-
-```python
-#!/usr/bin/env python3
-# .claude/ltm/hooks/session_end.py
-"""
-Hook: SessionEnd
-Trigger: At end of Claude Code session
-Action: Persist state, run eviction if needed
-"""
-
-import json
-import sys
-from pathlib import Path
-
-sys.path.insert(0, str(Path(__file__).parent.parent))
-from store import MemoryStore
-from priority import PriorityCalculator
-from eviction import EvictionManager
-
-def main():
-    payload = json.load(sys.stdin)
-
-    store = MemoryStore()
+@app.route('/hook/session_end', methods=['POST'])
+def session_end():
+    """Persist state and run eviction if needed."""
     priority_calc = PriorityCalculator()
     eviction_mgr = EvictionManager(store)
 
     state = store._read_state()
-    session = state.get("current_session", {})
     current_session_num = state.get("session_count", 1)
 
-    # Update priority for all accessed memories
+    # Update priorities for accessed memories
     stats = store._read_stats()
     for mem_id, mem_stats in stats.get("memories", {}).items():
         if mem_stats.get("last_session") == current_session_num:
-            # Recalculate priority
             memory = store.read(mem_id)
             priority = priority_calc.calculate(memory, mem_stats, current_session_num)
             mem_stats["priority"] = priority
@@ -593,9 +721,23 @@ def main():
     state["current_session"] = {}
     store._write_state(state)
 
-if __name__ == "__main__":
-    main()
+    return jsonify({"success": True})
 ```
+
+#### server.json
+
+The container writes connection info to `.claude/ltm/server.json` on startup:
+
+```json
+{
+  "container_id": "ltm-server-abc123",
+  "mcp_port": 8080,
+  "hooks_port": 8081,
+  "started_at": "2026-02-02T10:30:00Z"
+}
+```
+
+This allows hook scripts to discover the correct port for HTTP calls.
 
 ### 2.4 Data Files
 
@@ -1083,108 +1225,70 @@ Possible backends:
 
 ### 6.4 Adding New Hooks
 
-There are two approaches depending on your deployment mode:
+Hooks use a two-part architecture: shell scripts (host) + HTTP endpoints (container).
 
-#### Option A: Container Mode (HTTP Hooks)
+**Step 1: Add hook definition to `hooks/hooks.json`:**
+```json
+{
+  "hooks": {
+    "NewEvent": [
+      {
+        "matcher": "",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash ${CLAUDE_PLUGIN_ROOT}/hooks/new_event.sh"
+          }
+        ]
+      }
+    ]
+  }
+}
+```
 
-When using the containerized MCP server, hooks communicate via HTTP to the container's hooks server.
+**Step 2: Create shell script in `hooks/`:**
+```bash
+#!/bin/bash
+# hooks/new_event.sh
 
-1. Add a new endpoint in `mcp_server.py`:
-   ```python
-   async def hook_new_event(request) -> "web.Response":
-       """Handle new event hook."""
-       from aiohttp import web
+set -e
 
-       try:
-           payload = await request.json() if request.can_read_body else {}
-       except json.JSONDecodeError:
-           payload = {}
+PROJECT_ROOT="${CLAUDE_PROJECT_ROOT:-$(pwd)}"
+SERVER_JSON="${PROJECT_ROOT}/.claude/ltm/server.json"
 
-       # Hook logic here
-       store = MemoryStore()
-       # ... process the event ...
+if [[ ! -f "$SERVER_JSON" ]]; then
+    exit 0
+fi
 
-       return web.json_response({
-           "success": True,
-           "message": "Event processed",
-       })
-   ```
+PORT=$(jq -r '.hooks_port // empty' "$SERVER_JSON" 2>/dev/null)
 
-2. Register the route in `run_hooks_http_server()`:
-   ```python
-   app.router.add_post("/hook/new_event", hook_new_event)
-   ```
+if [[ -z "$PORT" ]]; then
+    exit 0
+fi
 
-3. Rebuild and redeploy the container:
-   ```bash
-   podman build -t ltm-mcp-server .claude/ltm/
-   podman stop <container-name>
-   podman rm <container-name>
-   # Container will be recreated on next ltm-start.sh
-   ```
+# Read payload from stdin if needed
+PAYLOAD=$(cat)
 
-4. Register in `.claude/settings.local.json` (use `127.0.0.1` to avoid IPv6 issues):
-   ```json
-   {
-     "hooks": {
-       "NewEvent": [
-         {
-           "matcher": "",
-           "hooks": [
-             {
-               "type": "command",
-               "command": "curl -s -X POST http://127.0.0.1:<HOOKS_PORT>/hook/new_event"
-             }
-           ]
-         }
-       ]
-     }
-   }
-   ```
+# Call the container's hook endpoint
+curl -s -X POST "http://127.0.0.1:${PORT}/hook/new_event" \
+    -H 'Content-Type: application/json' \
+    -d "$PAYLOAD" 2>/dev/null || true
+```
 
-   Replace `<HOOKS_PORT>` with the port from `.claude/ltm/server.json`.
+**Step 3: Add HTTP endpoint in container (`server/hooks_server.py`):**
+```python
+@app.route('/hook/new_event', methods=['POST'])
+def new_event():
+    """Handle new event hook."""
+    payload = request.get_json() or {}
+    # Process the hook...
+    return jsonify({"success": True})
+```
 
-#### Option B: Development Mode (Python Scripts)
-
-When running hooks as standalone Python scripts:
-
-1. Create hook script in `.claude/ltm_hooks/`:
-   ```python
-   #!/usr/bin/env python3
-   import json
-   import sys
-   from pathlib import Path
-
-   sys.path.insert(0, str(Path(__file__).parent.parent / "ltm"))
-   from store import MemoryStore
-
-   def main():
-       payload = json.load(sys.stdin)
-       # Hook logic
-       print("output for context")
-
-   if __name__ == "__main__":
-       main()
-   ```
-
-2. Register in `.claude/settings.local.json`:
-   ```json
-   {
-     "hooks": {
-       "NewEvent": [
-         {
-           "matcher": "",
-           "hooks": [
-             {
-               "type": "command",
-               "command": "python .claude/ltm_hooks/new_event.py"
-             }
-           ]
-         }
-       ]
-     }
-   }
-   ```
+**Step 4: Rebuild container:**
+```bash
+podman build -t ltm-mcp-server .
+```
 
 #### Hook Payload Reference
 
@@ -1199,9 +1303,10 @@ Claude Code provides different payloads for each hook type:
 
 #### Important Notes
 
-- **IPv6 issues**: Always use `127.0.0.1` instead of `localhost` in curl commands to avoid connection issues on systems where `localhost` resolves to IPv6.
 - **Timeout**: All hooks must complete within 5 seconds (Claude Code timeout).
-- **Container mode**: The container must be running for HTTP hooks to work. The `ltm-start.sh` script ensures this.
+- **Auto-loading**: Hooks from `hooks/hooks.json` are automatically loaded by the plugin system; no manual registration needed.
+- **Container dependency**: Hooks silently exit if the container isn't running (no error to user).
+- **IPv6**: Use `127.0.0.1` explicitly, not `localhost`, to avoid IPv6 resolution issues on some systems.
 
 ---
 
@@ -1256,6 +1361,8 @@ Claude Code enforces a 5-second timeout on hooks. This constrains:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.3.0 | 2026-02-02 | Rewrote section 2.3 (Hooks) to document shell script + HTTP architecture; updated section 1.1 diagram to show container boundary; updated section 6.4 with new hook creation process |
+| 1.2.0 | 2026-02-02 | Updated for plugin-based distribution; hooks now auto-loaded from `hooks/hooks.json`; MCP server runs via stdio in ephemeral container |
 | 1.1.0 | 2026-02-01 | Updated "Adding New Hooks" section with container mode (HTTP) and development mode (Python scripts); added hook payload reference; documented IPv6/localhost issue |
 | 1.0.0 | 2026-01-28 | Initial architecture document |
 

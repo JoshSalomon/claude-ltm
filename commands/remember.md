@@ -1,11 +1,15 @@
+---
+description: Store a new memory in LTM
+---
+
 # Store a Memory
 
 Store a new memory in the Long-Term Memory system.
 
 ## Usage
 
-- `/remember` - Interactive mode: ask for topic and content
-- `/remember <topic>` - Store a memory with the given topic
+- `/ltm:remember` - Interactive mode: ask for topic and content
+- `/ltm:remember <topic>` - Store a memory with the given topic
 
 ## Instructions
 

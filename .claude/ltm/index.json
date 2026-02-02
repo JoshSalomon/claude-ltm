@@ -26,36 +26,31 @@
       "phase": 0,
       "difficulty": 0.6,
       "created_at": "2026-02-01T14:17:22.069764+00:00"
+    },
+    "mem_244b06c0": {
+      "topic": "Claude Code slash command requirements for help and discovery",
+      "tags": [
+        "claude-code",
+        "slash-commands",
+        "plugin",
+        "frontmatter",
+        "help"
+      ],
+      "phase": 0,
+      "difficulty": 0.6,
+      "created_at": "2026-02-02T09:56:56.039442+00:00"
+    },
+    "mem_2aeb9280": {
+      "topic": "Claude Code plugin persistent installation via marketplace",
+      "tags": [
+        "claude-code",
+        "plugin",
+        "marketplace",
+        "installation"
+      ],
+      "phase": 0,
+      "difficulty": 0.7,
+      "created_at": "2026-02-02T10:14:04.088843+00:00"
     }
-  },
-  "tag_index": {
-    "claude-code": [
-      "mem_14b90308"
-    ],
-    "configuration": [
-      "mem_14b90308"
-    ],
-    "debugging": [
-      "mem_14b90308",
-      "mem_4938ac0a"
-    ],
-    "networking": [
-      "mem_4938ac0a"
-    ],
-    "curl": [
-      "mem_4938ac0a"
-    ],
-    "ipv6": [
-      "mem_4938ac0a"
-    ],
-    "ipv4": [
-      "mem_4938ac0a"
-    ],
-    "localhost": [
-      "mem_4938ac0a"
-    ],
-    "container": [
-      "mem_4938ac0a"
-    ]
   }
 }

@@ -6,7 +6,7 @@
 #   podman pull quay.io/jsalomon/ltm-mcp-server:latest
 #
 # Build locally:
-#   podman build -t ltm-mcp-server .claude/ltm/
+#   podman build -t ltm-mcp-server .
 #
 # Run modes:
 #
@@ -18,10 +18,6 @@
 #     -v "$(pwd)/.claude/ltm:/data:Z" \
 #     -p 8765:8765 -p 9999:9999 \
 #     ltm-mcp-server --server
-#
-# Register with Claude Code (stdio mode):
-#   claude mcp add --transport stdio ltm -- podman run -i --rm --userns=keep-id \
-#     -v "$(pwd)/.claude/ltm:/data:Z" quay.io/jsalomon/ltm-mcp-server
 
 FROM python:3.12-slim
 
@@ -45,14 +41,14 @@ RUN apt-get update && \
 RUN pip install --no-cache-dir --upgrade pip>=25.3
 
 # Install dependencies first (for better caching)
-COPY requirements.txt .
+COPY server/requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
-COPY priority.py .
-COPY store.py .
-COPY eviction.py .
-COPY mcp_server.py .
+# Copy application code from server/ directory
+COPY server/priority.py .
+COPY server/store.py .
+COPY server/eviction.py .
+COPY server/mcp_server.py .
 
 # Create non-root user for security
 RUN useradd --create-home --shell /bin/bash ltm && \
