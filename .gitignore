@@ -205,3 +205,8 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# LTM data files (git-ignored)
+.claude/ltm/stats.json
+.claude/ltm/state.json
+.claude/ltm/server.json

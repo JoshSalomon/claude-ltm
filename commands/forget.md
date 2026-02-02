@@ -1,10 +1,14 @@
+---
+description: Delete a memory by ID
+---
+
 # Delete a Memory
 
 Delete a memory from the Long-Term Memory system.
 
 ## Usage
 
-- `/forget <id>` - Delete a memory by its ID
+- `/ltm:forget <id>` - Delete a memory by its ID
 
 ## Instructions
 

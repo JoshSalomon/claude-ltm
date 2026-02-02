@@ -1,6 +1,6 @@
 # Long-Term Memory (LTM) System - Product Requirements Document
 
-**Version: 1.5.0 | Last Updated: 2026-02-01**
+**Version: 1.6.0 | Last Updated: 2026-02-02**
 
 ---
 
@@ -173,51 +173,127 @@ priority = (difficulty * 0.4) + (recency * 0.3) + (frequency * 0.3)
 | `ltm_check` | (none) | Check system integrity |
 | `ltm_fix` | `archive_orphans?`, `clean_orphaned_archives?` | Fix integrity issues |
 
-### FR-9: Slash Commands (User Interface)
+### FR-9: Plugin Distribution
 
-Claude Code slash commands provide a user-friendly interface to the LTM system.
+LTM is distributed as a Claude Code plugin, installable directly from GitHub.
+
+#### Installation
+
+```bash
+# Add the LTM marketplace
+claude plugin marketplace add https://github.com/JoshSalomon/claude-ltm.git
+
+# Install the plugin
+claude plugin install ltm@claude-ltm
+
+# Enable extended thinking integration (run inside Claude Code)
+/ltm:init
+```
+
+#### Plugin Structure
+
+```
+claude-ltm/
+├── .claude-plugin/
+│   ├── plugin.json           # Plugin manifest
+│   └── marketplace.json      # Marketplace manifest
+├── .mcp.json                 # MCP server configuration
+├── hooks/
+│   └── hooks.json            # Hook definitions (auto-loaded)
+├── commands/                 # Slash commands
+│   ├── init.md
+│   ├── remember.md
+│   ├── recall.md
+│   ├── forget.md
+│   ├── status.md
+│   ├── list.md
+│   ├── check.md
+│   ├── fix.md
+│   └── help.md
+├── server/                   # MCP server source
+├── scripts/
+│   └── run-mcp.sh            # Container launcher
+├── Dockerfile
+└── README.md
+```
+
+#### Key Configuration Files
+
+**Plugin Manifest** (`.claude-plugin/plugin.json`):
+```json
+{
+  "name": "ltm",
+  "version": "0.1.0",
+  "description": "Long-Term Memory for Claude Code",
+  "commands": "./commands/",
+  "mcpServers": "./.mcp.json"
+}
+```
+
+**Marketplace Manifest** (`.claude-plugin/marketplace.json`):
+```json
+{
+  "name": "claude-ltm",
+  "owner": { "name": "Josh Salomon", "email": "..." },
+  "plugins": [
+    { "name": "ltm", "source": "./" }
+  ]
+}
+```
+
+#### Design Decisions
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Distribution | GitHub marketplace | No central registry dependency |
+| Runtime | Container (podman/docker) | Avoids Python version issues |
+| Data Storage | Per-project `.claude/ltm/` | Git-tracked, team-shareable |
+| Hooks | Auto-loaded from `hooks/hooks.json` | No explicit manifest reference needed |
+
+### FR-10: Slash Commands (User Interface)
+
+Claude Code slash commands provide a user-friendly interface to the LTM system. All commands use the `ltm:` namespace.
 
 #### Basic Commands
 
 | Command | Description | Example |
 |---------|-------------|---------|
-| `/remember` | Store a memory interactively | `/remember` → prompts for topic and content |
-| `/remember <topic>` | Store a memory with given topic | `/remember Fix for auth bug` |
-| `/recall <query>` | Search memories by keyword | `/recall database timeout` |
-| `/forget <id>` | Delete a memory by ID | `/forget mem_abc123` |
+| `/ltm:remember` | Store a memory interactively | `/ltm:remember` → prompts for topic and content |
+| `/ltm:remember <topic>` | Store a memory with given topic | `/ltm:remember Fix for auth bug` |
+| `/ltm:recall <query>` | Search memories by keyword | `/ltm:recall database timeout` |
+| `/ltm:forget <id>` | Delete a memory by ID | `/ltm:forget mem_abc123` |
 
 #### Status and Listing Commands
 
 | Command | Description |
 |---------|-------------|
-| `/ltm` | Show LTM system status (memory count, storage, health) |
-| `/ltm help` | Show command summary |
-| `/ltm list` | List all memories with priority scores |
-| `/ltm list --tag <tag>` | List memories filtered by tag |
-| `/ltm list --phase <n>` | List memories filtered by eviction phase |
+| `/ltm:status` | Show LTM system status (memory count, storage, health) |
+| `/ltm:help` | Show command summary |
+| `/ltm:list` | List all memories with priority scores |
+| `/ltm:list --tag <tag>` | List memories filtered by tag |
+| `/ltm:list --phase <n>` | List memories filtered by eviction phase |
 
 #### Setup and Maintenance Commands
 
 | Command | Description |
 |---------|-------------|
-| `/ltm init` | Initialize LTM for the project (configure hooks + add CLAUDE.md instructions) |
-| `/ltm check` | Check LTM integrity (detect orphaned files and missing references) |
-| `/ltm fix` | Fix LTM integrity issues (remove orphans, clean up broken references) |
-| `/ltm fix --clean-archives` | Fix issues and also remove orphaned archive files |
+| `/ltm:init` | Initialize LTM for the project (configure hooks + add CLAUDE.md instructions) |
+| `/ltm:check` | Check LTM integrity (detect orphaned files and missing references) |
+| `/ltm:fix` | Fix LTM integrity issues (remove orphans, clean up broken references) |
+| `/ltm:fix --clean-archives` | Fix issues and also remove orphaned archive files |
 
-**Initialization (`/ltm init`):**
-- Configure hooks in `.claude/settings.local.json` (no manual JSON editing required)
+**Initialization (`/ltm:init`):**
 - Add proactive memory usage instructions to project's CLAUDE.md
-- Remind user to restart Claude Code for hooks to take effect
+- Add extended thinking integration instructions to CLAUDE.md
 
-**Integrity Check (`/ltm check`):**
+**Integrity Check (`/ltm:check`):**
 - Detect memory files in `memories/` with no corresponding index entry
 - Detect index entries with no corresponding memory file
 - Detect stats entries with no corresponding index entry
 - Report archive files that reference deleted memories
 - Return summary of issues found (or "All clear" if none)
 
-**Integrity Fix (`/ltm fix`):**
+**Integrity Fix (`/ltm:fix`):**
 - Remove orphaned memory files (files with no index entry)
 - Remove orphaned index entries (entries with no memory file)
 - Remove orphaned stats entries (entries with no index entry)
@@ -475,12 +551,7 @@ Memory data is separated into versioned (git-tracked) and volatile (git-ignored)
 │   ├── track_difficulty.py  # PostToolUse: track task difficulty
 │   ├── pre_compact.py       # PreCompact: save state before compaction
 │   └── session_end.py       # SessionEnd: persist and run eviction
-├── commands/                # Slash command definitions
-│   ├── remember.md
-│   ├── recall.md
-│   ├── forget.md
-│   └── ltm.md
-└── settings.local.json      # Hooks configuration (created by /ltm init)
+└── settings.local.json      # Local settings (if any)
 ```
 
 ### Stats File Format
@@ -569,14 +640,11 @@ Located in `.claude/ltm/index.json` (git-tracked):
       "difficulty": 0.8,
       "created_at": "2026-01-15T10:30:00Z"
     }
-  },
-  "tag_index": {
-    "database": ["mem_abc123"],
-    "debugging": ["mem_abc123"],
-    "postgres": ["mem_abc123"]
   }
 }
 ```
+
+**Note:** Tag filtering is performed by scanning the `memories` object directly (O(n)). See TD-1 in Technical Debt for optimization options if performance becomes an issue.
 
 ### State File Format
 
@@ -779,7 +847,7 @@ priority = clamp(base_priority + importance_boost, 0.0, 1.0)
 **Usage:**
 ```bash
 # Store a critical memory
-/remember Fix for production outage
+/ltm:remember Fix for production outage
 > Tags: database, critical-fix, importance:critical
 
 # Via MCP tool
@@ -795,8 +863,8 @@ store_memory(
 - `importance:important` memories only evict after all normal/low memories are processed
 
 **UI enhancements:**
-- `/ltm list` shows importance level in output
-- `/ltm list --importance critical` filters by importance
+- `/ltm:list` shows importance level in output
+- `/ltm:list --importance critical` filters by importance
 
 **Implementation notes:**
 - Importance is stored as a tag for simplicity (no schema changes)
@@ -817,10 +885,10 @@ store_memory(
 
 | Command | Description |
 |---------|-------------|
-| `/recall --archives <query>` | Search only archived memories |
-| `/recall --all <query>` | Search both active and archived memories |
-| `/ltm list --archives` | List all archived memories |
-| `/ltm restore <id>` | Restore an archived memory to active status |
+| `/ltm:recall --archives <query>` | Search only archived memories |
+| `/ltm:recall --all <query>` | Search both active and archived memories |
+| `/ltm:list --archives` | List all archived memories |
+| `/ltm:restore <id>` | Restore an archived memory to active status |
 
 **MCP tools:**
 
@@ -950,200 +1018,21 @@ To enable fast archive searching without reading all files:
 
 ---
 
-### FE-6: Claude Code Plugin Distribution
-
-**Status:** Planned
-
-**Problem:** Current installation requires running a setup script and manual container management. Users must understand container runtimes and port configurations.
-
-**Solution:** Package LTM as a Claude Code plugin for single-command installation.
-
-**Design decisions:**
-
-| Decision | Choice | Rationale |
-|----------|--------|-----------|
-| Runtime | Container | Already works, avoids Python version issues |
-| Data Storage | Per-project | Git-tracked, team-shareable |
-| Security | Container preferred | Supply chain risk with package managers like npm/pypi |
-
-**Current vs Plugin Architecture:**
-
-| Current | Plugin |
-|---------|--------|
-| Manual `setup.sh` installation | `claude plugin install ltm` |
-| Files copied to each project | Plugin cached and shared |
-| Manual container management | Automatic MCP lifecycle |
-| Slash commands in `.claude/commands/` | Namespaced `/ltm:remember` |
-
-**Plugin structure:**
-
-```
-claude-ltm/
-├── .claude-plugin/
-│   └── plugin.json              # Plugin manifest (REQUIRED)
-├── .mcp.json                    # MCP server definition
-├── hooks/
-│   └── hooks.json               # Hook configuration
-├── commands/                    # Slash commands
-│   ├── remember.md
-│   ├── recall.md
-│   ├── forget.md
-│   └── ltm.md
-├── server/                      # MCP server implementation
-│   ├── mcp_server.py
-│   ├── store.py
-│   ├── eviction.py
-│   ├── priority.py
-│   └── requirements.txt
-├── Dockerfile                   # Container build (optional)
-├── README.md
-└── LICENSE
-```
-
-**Key configuration files:**
-
-1. **Plugin Manifest** (`.claude-plugin/plugin.json`):
-```json
-{
-  "name": "ltm",
-  "version": "0.1.0",
-  "description": "Long-Term Memory for Claude Code - persistent memory across sessions",
-  "author": {
-    "name": "Josh Salomon"
-  },
-  "repository": "https://github.com/JoshSalomon/claude-ltm",
-  "license": "Apache-2.0",
-  "keywords": ["memory", "mcp", "context", "persistence"],
-  "commands": "./commands/",
-  "hooks": "./hooks/hooks.json",
-  "mcpServers": "./.mcp.json"
-}
-```
-
-2. **MCP Server Config** (`.mcp.json`):
-```json
-{
-  "ltm": {
-    "command": "${CONTAINER_RUNTIME}",
-    "args": [
-      "run", "-i", "--rm",
-      "--userns=keep-id",
-      "-v", "${CLAUDE_PROJECT_ROOT}/.claude/ltm:/data:Z",
-      "-p", "${LTM_MCP_PORT}:8080",
-      "-p", "${LTM_HOOK_PORT}:8081",
-      "quay.io/jsalomon/ltm-mcp-server:latest"
-    ]
-  }
-}
-```
-
-**Note:** `${CONTAINER_RUNTIME}` resolves to `podman` or `docker` based on system detection during plugin installation.
-
-3. **Hooks Config** (`hooks/hooks.json`):
-
-Hooks communicate with the persistent container via HTTP on the hook port:
-
-```json
-{
-  "hooks": [
-    {
-      "event": "SessionStart",
-      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/session_start -H 'Content-Type: application/json' -d @-"
-    },
-    {
-      "event": "PostToolUse",
-      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/post_tool_use -H 'Content-Type: application/json' -d @-"
-    },
-    {
-      "event": "PreCompact",
-      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/pre_compact -H 'Content-Type: application/json' -d @-"
-    },
-    {
-      "event": "SessionEnd",
-      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/session_end -H 'Content-Type: application/json' -d @-"
-    }
-  ]
-}
-```
-
-**Architecture:** Each project runs one container instance with two ports:
-- `${LTM_MCP_PORT}`: MCP protocol communication
-- `${LTM_HOOK_PORT}`: HTTP endpoint for hooks
-
-Ports are assigned during plugin installation and stored in project configuration.
-
-**User experience:**
-
-```bash
-# Installation (future)
-claude plugin marketplace add JoshSalomon/claude-ltm
-claude plugin install ltm
-
-# Commands become available as /ltm:remember, /ltm:recall, etc.
-```
-
-**Implementation phases:**
-
-1. **Phase 1: Restructure Repository**
-   - Create `.claude-plugin/plugin.json` manifest
-   - Create `.mcp.json` for MCP server definition
-   - Create `hooks/hooks.json` for hook configuration
-   - Move source files to new structure
-
-2. **Phase 2: Update Path Handling**
-   - Modify `store.py` to use `LTM_DATA_PATH` environment variable
-   - Modify `mcp_server.py` to read data path from env
-   - Update hook scripts to use `${CLAUDE_PLUGIN_ROOT}` paths
-   - Ensure data is stored in project's `.claude/ltm/` (not plugin cache)
-
-3. **Phase 3: Update Commands**
-   - Remove `/ltm init` command (plugin handles setup)
-   - Update `/ltm start` and `/ltm stop` (may not be needed with plugin lifecycle)
-   - Keep `/remember`, `/recall`, `/forget`, `/ltm list`, `/ltm check`, `/ltm fix`
-
-4. **Phase 4: Create Marketplace Entry**
-   - Add `marketplace.json` to repo root
-   - Publish to Claude Code plugin marketplace
-
-5. **Phase 5: Documentation**
-   - Update README with plugin installation instructions
-   - Add migration guide for existing users
-   - Document slash command namespacing (`/ltm:remember` vs `/remember`)
-
-**Migration path:**
-- Existing setup.sh installations continue to work
-- Plugin installation can coexist or replace setup.sh
-- Data format unchanged (memories in `.claude/ltm/`)
-
-**Prerequisites:**
-- Claude Code 1.0.33+ (plugin system)
-- podman or docker installed
-
----
-
 ## 11. Technical Debt
 
-### TD-1: Container Auto-Stop Not Implemented
+### TD-1: Tag Index Performance Optimization
 
 **Status:** Deferred
 
-**Description:** The LTM container starts automatically when Claude Code connects (via `ltm-start.sh` called by MCP). However, the container does not stop automatically when Claude Code exits.
+**Description:** The `tag_index` was removed from index.json to prevent git merge conflicts. Tag filtering now scans all memories (O(n)). For the expected scale (<1000 memories), this is acceptable.
 
-**Current Behavior:**
-- **Start**: Automatic - container starts when Claude Code connects
-- **Stop**: Manual - user must run `bash .claude/ltm/ltm-stop.sh` from terminal or `/ltm stop` inside Claude Code
+**If performance becomes an issue, consider:**
 
-**Why Deferred:**
-- Adding auto-stop to SessionEnd hook would add startup latency on quick restarts
-- Container resource usage when idle is minimal
-- Users can manually stop when needed
+1. **Option A: Cache in stats.json** - Store computed tag_index in git-ignored stats.json. Rebuild on startup from index.json.
 
-**Future Implementation Options:**
-1. Add container stop to SessionEnd hook (simple but adds restart latency)
-2. Implement idle timeout in container (container stops itself after N minutes of inactivity)
-3. Add systemd/launchd service for lifecycle management
+2. **Option B: Separate tag_index.json** - Create dedicated git-ignored tag_index.json file. Rebuild on startup.
 
-**Workaround:** Run `bash .claude/ltm/ltm-stop.sh` from terminal when done with Claude Code.
+Both options provide O(1) tag lookups while avoiding git conflicts.
 
 ---
 
@@ -1151,6 +1040,7 @@ claude plugin install ltm
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.6.0 | 2026-02-02 | Implemented FR-9 (Plugin Distribution) - plugin now installable from GitHub via marketplace; FR-10 (Slash Commands) now uses `ltm:` namespace; removed TD-1 and Technical Debt section; removed FE-6 from Future Enhancements |
 | 1.5.0 | 2026-02-01 | Added FE-6 (Claude Code Plugin Distribution) for single-command installation |
 | 1.4.1 | 2026-02-01 | Added FE-5 (macOS and Windows Platform Support) for cross-platform migration |
 | 1.4.0 | 2026-02-01 | Added Future Enhancements section: FE-1 (Memory Compression with LLMlingua), FE-2 (Anthropic API Token Counting), FE-3 (Importance Tagging for Priority Boost), FE-4 (Archive Search and Recovery with ultrathink integration) |

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "claude-ltm",
+  "description": "Long-Term Memory plugin for Claude Code",
+  "owner": {
+    "name": "Josh Salomon",
+    "email": "josh.salomon@gmail.com"
+  },
+  "plugins": [
+    {
+      "name": "ltm",
+      "description": "Long-Term Memory for Claude Code - persistent memory across sessions",
+      "version": "0.1.0",
+      "author": {
+        "name": "Josh Salomon"
+      },
+      "source": "./",
+      "category": "productivity"
+    }
+  ]
+}

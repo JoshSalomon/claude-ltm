@@ -4,18 +4,24 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 
 ## Prerequisites
 
-1. **MCP Server Registered**
+1. **Plugin Installed**
    ```bash
-   # Verify the LTM MCP server is registered
-   claude mcp list
+   # Add the LTM marketplace and install the plugin
+   claude plugin marketplace add https://github.com/JoshSalomon/claude-ltm.git
+   claude plugin install ltm@claude-ltm
 
-   # If not registered, add it:
-   claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
+   # Verify installation
+   claude plugin list
    ```
 
-2. **Hooks Configured**
+2. **Container Running**
 
-   Verify `.claude/settings.local.json` contains the hooks configuration (should already be set up).
+   The MCP server runs in a container. It starts automatically when Claude Code connects.
+
+   Verify the container is running:
+   ```bash
+   podman ps | grep ltm
+   ```
 
 3. **Clean State (Optional)**
 
@@ -26,6 +32,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
    rm -f .claude/ltm/index.json
    rm -f .claude/ltm/stats.json
    rm -f .claude/ltm/state.json
+   rm -f .claude/ltm/server.json
    ```
 
 ---
@@ -35,7 +42,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 1.1 Check System Status
 
 ```
-/ltm
+/ltm:status
 ```
 
 **Expected:** Shows system status with:
@@ -46,7 +53,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 1.2 Show Help
 
 ```
-/ltm help
+/ltm:help
 ```
 
 **Expected:** Displays table of all available commands.
@@ -54,7 +61,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 1.3 List Memories (Empty)
 
 ```
-/ltm list
+/ltm:list
 ```
 
 **Expected:** Shows empty list or "No memories found" message.
@@ -66,7 +73,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 2.1 Store with Topic
 
 ```
-/remember Database connection pooling fix
+/ltm:remember Database connection pooling fix
 ```
 
 **Expected:** Claude prompts for content, then stores the memory. Confirms with memory ID.
@@ -74,7 +81,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 2.2 Store Interactively
 
 ```
-/remember
+/ltm:remember
 ```
 
 **Expected:** Claude prompts for both topic and content.
@@ -82,7 +89,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 2.3 Verify Storage
 
 ```
-/ltm list
+/ltm:list
 ```
 
 **Expected:** Shows the memories you just created.
@@ -94,7 +101,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 3.1 Search by Keyword
 
 ```
-/recall database
+/ltm:recall database
 ```
 
 **Expected:** Returns memories matching "database" in topic or content.
@@ -102,7 +109,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 3.2 Search with No Results
 
 ```
-/recall xyznonexistent
+/ltm:recall xyznonexistent
 ```
 
 **Expected:** Shows "No memories found" with suggestions.
@@ -110,7 +117,7 @@ This guide walks you through testing the Long-Term Memory system in a live Claud
 ### 3.3 Filter by Tag
 
 ```
-/ltm list --tag database
+/ltm:list --tag database
 ```
 
 **Expected:** Shows only memories tagged with "database".
@@ -132,7 +139,7 @@ Can you show me the full content of memory mem_XXXXX?
 ### 4.2 Delete a Memory
 
 ```
-/forget mem_XXXXX
+/ltm:forget mem_XXXXX
 ```
 
 **Expected:**
@@ -143,7 +150,7 @@ Can you show me the full content of memory mem_XXXXX?
 ### 4.3 Verify Deletion
 
 ```
-/ltm list
+/ltm:list
 ```
 
 **Expected:** Deleted memory no longer appears.
@@ -155,7 +162,7 @@ Can you show me the full content of memory mem_XXXXX?
 ### 5.1 Check Integrity (Healthy)
 
 ```
-/ltm check
+/ltm:check
 ```
 
 **Expected:** Shows "Healthy" status with no issues.
@@ -171,7 +178,7 @@ echo -e "---\nid: orphan_test\ntopic: Orphan\n---\nOrphan content" > .claude/ltm
 ### 5.3 Check Integrity (Issues Found)
 
 ```
-/ltm check
+/ltm:check
 ```
 
 **Expected:** Shows "Issues Found" with orphaned file listed.
@@ -179,7 +186,7 @@ echo -e "---\nid: orphan_test\ntopic: Orphan\n---\nOrphan content" > .claude/ltm
 ### 5.4 Fix Integrity Issues
 
 ```
-/ltm fix
+/ltm:fix
 ```
 
 **Expected:**
@@ -190,7 +197,7 @@ echo -e "---\nid: orphan_test\ntopic: Orphan\n---\nOrphan content" > .claude/ltm
 ### 5.5 Verify Fix
 
 ```
-/ltm check
+/ltm:check
 ```
 
 **Expected:** Shows "Healthy" status.
@@ -211,7 +218,7 @@ claude
 
 ### 6.2 Difficulty Tracking
 
-Perform some operations that might fail (e.g., try to read a non-existent file). The `track_difficulty.py` hook tracks tool failures.
+Perform some operations that might fail (e.g., try to read a non-existent file). The `post_tool_use.sh` hook calls the container to track tool failures.
 
 ### 6.3 Session End
 
@@ -221,7 +228,7 @@ Exit the session:
 /exit
 ```
 
-**Expected:** Session end hook runs, persisting any state changes.
+**Expected:** Session end hook runs (via HTTP call to container), persisting any state changes.
 
 ---
 
@@ -234,18 +241,18 @@ To test eviction, you need many memories:
 Store 10+ memories on different topics:
 
 ```
-/remember API authentication patterns
-/remember Error handling best practices
-/remember Database migration strategy
-/remember Caching implementation
-/remember Logging configuration
+/ltm:remember API authentication patterns
+/ltm:remember Error handling best practices
+/ltm:remember Database migration strategy
+/ltm:remember Caching implementation
+/ltm:remember Logging configuration
 ...
 ```
 
 ### 7.2 Check Phases
 
 ```
-/ltm list --phase 0
+/ltm:list --phase 0
 ```
 
 **Expected:** All new memories are in phase 0 (Full).
@@ -269,7 +276,7 @@ Then exit and restart the session. Low-priority memories should transition to ph
 ### 7.4 Verify Phase Transitions
 
 ```
-/ltm list --phase 1
+/ltm:list --phase 1
 ```
 
 **Expected:** Shows memories that have been reduced to "Hint" phase.
@@ -281,7 +288,7 @@ Then exit and restart the session. Low-priority memories should transition to ph
 ### 8.1 Access a Memory
 
 ```
-/recall database
+/ltm:recall database
 ```
 
 ### 8.2 Exit and Restart
@@ -304,7 +311,7 @@ git status
 
 **Expected:**
 - `memories/*.md` and `index.json` are trackable
-- `stats.json` and `state.json` are ignored
+- `stats.json`, `state.json`, and `server.json` are ignored
 
 ### 9.2 Commit Memories
 
@@ -319,29 +326,52 @@ git commit -m "Add LTM memories"
 
 ## Troubleshooting
 
-### MCP Server Not Working
+### Plugin Not Working
 
 ```bash
-# Check registration
-claude mcp list
+# Check installation
+claude plugin list
 
-# Remove and re-add
-claude mcp remove ltm
-claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
+# Reinstall if needed
+claude plugin uninstall ltm
+claude plugin install ltm@claude-ltm
+```
+
+### Container Not Running
+
+```bash
+# Check container status
+podman ps -a | grep ltm
+
+# Check server.json exists
+cat .claude/ltm/server.json
+
+# Manually start if needed (usually auto-starts)
+bash scripts/run-mcp.sh
 ```
 
 ### Hooks Not Running
 
-Check `.claude/settings.local.json` has correct hook configuration.
+Hooks are auto-loaded from the plugin's `hooks/hooks.json`. If they're not running:
+
+1. Verify plugin is installed: `claude plugin list`
+2. Check the container is running and `server.json` exists
+3. Hooks silently exit if container isn't available
 
 ### Reset Everything
 
 ```bash
+# Stop container
+podman stop ltm-server 2>/dev/null || true
+podman rm ltm-server 2>/dev/null || true
+
+# Clear data
 rm -rf .claude/ltm/memories/*
 rm -rf .claude/ltm/archives/*
 rm -f .claude/ltm/index.json
 rm -f .claude/ltm/stats.json
 rm -f .claude/ltm/state.json
+rm -f .claude/ltm/server.json
 ```
 
 ---
@@ -350,15 +380,15 @@ rm -f .claude/ltm/state.json
 
 | Test | Command | Pass |
 |------|---------|------|
-| Show status | `/ltm` | [ ] |
-| Show help | `/ltm help` | [ ] |
-| List memories | `/ltm list` | [ ] |
-| Store memory | `/remember Test topic` | [ ] |
-| Search memories | `/recall test` | [ ] |
-| Filter by tag | `/ltm list --tag test` | [ ] |
-| Delete memory | `/forget mem_XXX` | [ ] |
-| Check integrity | `/ltm check` | [ ] |
-| Fix integrity | `/ltm fix` | [ ] |
+| Show status | `/ltm:status` | [ ] |
+| Show help | `/ltm:help` | [ ] |
+| List memories | `/ltm:list` | [ ] |
+| Store memory | `/ltm:remember Test topic` | [ ] |
+| Search memories | `/ltm:recall test` | [ ] |
+| Filter by tag | `/ltm:list --tag test` | [ ] |
+| Delete memory | `/ltm:forget mem_XXX` | [ ] |
+| Check integrity | `/ltm:check` | [ ] |
+| Fix integrity | `/ltm:fix` | [ ] |
 
 ---
 
