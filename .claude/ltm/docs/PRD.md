@@ -1,6 +1,6 @@
 # Long-Term Memory (LTM) System - Product Requirements Document
 
-**Version: 1.4.1 | Last Updated: 2026-02-01**
+**Version: 1.5.0 | Last Updated: 2026-02-01**
 
 ---
 
@@ -950,6 +950,177 @@ To enable fast archive searching without reading all files:
 
 ---
 
+### FE-6: Claude Code Plugin Distribution
+
+**Status:** Planned
+
+**Problem:** Current installation requires running a setup script and manual container management. Users must understand container runtimes and port configurations.
+
+**Solution:** Package LTM as a Claude Code plugin for single-command installation.
+
+**Design decisions:**
+
+| Decision | Choice | Rationale |
+|----------|--------|-----------|
+| Runtime | Container | Already works, avoids Python version issues |
+| Data Storage | Per-project | Git-tracked, team-shareable |
+| Security | Container preferred | Supply chain risk with package managers like npm/pypi |
+
+**Current vs Plugin Architecture:**
+
+| Current | Plugin |
+|---------|--------|
+| Manual `setup.sh` installation | `claude plugin install ltm` |
+| Files copied to each project | Plugin cached and shared |
+| Manual container management | Automatic MCP lifecycle |
+| Slash commands in `.claude/commands/` | Namespaced `/ltm:remember` |
+
+**Plugin structure:**
+
+```
+claude-ltm/
+├── .claude-plugin/
+│   └── plugin.json              # Plugin manifest (REQUIRED)
+├── .mcp.json                    # MCP server definition
+├── hooks/
+│   └── hooks.json               # Hook configuration
+├── commands/                    # Slash commands
+│   ├── remember.md
+│   ├── recall.md
+│   ├── forget.md
+│   └── ltm.md
+├── server/                      # MCP server implementation
+│   ├── mcp_server.py
+│   ├── store.py
+│   ├── eviction.py
+│   ├── priority.py
+│   └── requirements.txt
+├── Dockerfile                   # Container build (optional)
+├── README.md
+└── LICENSE
+```
+
+**Key configuration files:**
+
+1. **Plugin Manifest** (`.claude-plugin/plugin.json`):
+```json
+{
+  "name": "ltm",
+  "version": "0.1.0",
+  "description": "Long-Term Memory for Claude Code - persistent memory across sessions",
+  "author": {
+    "name": "Josh Salomon"
+  },
+  "repository": "https://github.com/JoshSalomon/claude-ltm",
+  "license": "Apache-2.0",
+  "keywords": ["memory", "mcp", "context", "persistence"],
+  "commands": "./commands/",
+  "hooks": "./hooks/hooks.json",
+  "mcpServers": "./.mcp.json"
+}
+```
+
+2. **MCP Server Config** (`.mcp.json`):
+```json
+{
+  "ltm": {
+    "command": "${CONTAINER_RUNTIME}",
+    "args": [
+      "run", "-i", "--rm",
+      "--userns=keep-id",
+      "-v", "${CLAUDE_PROJECT_ROOT}/.claude/ltm:/data:Z",
+      "-p", "${LTM_MCP_PORT}:8080",
+      "-p", "${LTM_HOOK_PORT}:8081",
+      "quay.io/jsalomon/ltm-mcp-server:latest"
+    ]
+  }
+}
+```
+
+**Note:** `${CONTAINER_RUNTIME}` resolves to `podman` or `docker` based on system detection during plugin installation.
+
+3. **Hooks Config** (`hooks/hooks.json`):
+
+Hooks communicate with the persistent container via HTTP on the hook port:
+
+```json
+{
+  "hooks": [
+    {
+      "event": "SessionStart",
+      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/session_start -H 'Content-Type: application/json' -d @-"
+    },
+    {
+      "event": "PostToolUse",
+      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/post_tool_use -H 'Content-Type: application/json' -d @-"
+    },
+    {
+      "event": "PreCompact",
+      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/pre_compact -H 'Content-Type: application/json' -d @-"
+    },
+    {
+      "event": "SessionEnd",
+      "command": "curl -s -X POST http://127.0.0.1:${LTM_HOOK_PORT}/hook/session_end -H 'Content-Type: application/json' -d @-"
+    }
+  ]
+}
+```
+
+**Architecture:** Each project runs one container instance with two ports:
+- `${LTM_MCP_PORT}`: MCP protocol communication
+- `${LTM_HOOK_PORT}`: HTTP endpoint for hooks
+
+Ports are assigned during plugin installation and stored in project configuration.
+
+**User experience:**
+
+```bash
+# Installation (future)
+claude plugin marketplace add JoshSalomon/claude-ltm
+claude plugin install ltm
+
+# Commands become available as /ltm:remember, /ltm:recall, etc.
+```
+
+**Implementation phases:**
+
+1. **Phase 1: Restructure Repository**
+   - Create `.claude-plugin/plugin.json` manifest
+   - Create `.mcp.json` for MCP server definition
+   - Create `hooks/hooks.json` for hook configuration
+   - Move source files to new structure
+
+2. **Phase 2: Update Path Handling**
+   - Modify `store.py` to use `LTM_DATA_PATH` environment variable
+   - Modify `mcp_server.py` to read data path from env
+   - Update hook scripts to use `${CLAUDE_PLUGIN_ROOT}` paths
+   - Ensure data is stored in project's `.claude/ltm/` (not plugin cache)
+
+3. **Phase 3: Update Commands**
+   - Remove `/ltm init` command (plugin handles setup)
+   - Update `/ltm start` and `/ltm stop` (may not be needed with plugin lifecycle)
+   - Keep `/remember`, `/recall`, `/forget`, `/ltm list`, `/ltm check`, `/ltm fix`
+
+4. **Phase 4: Create Marketplace Entry**
+   - Add `marketplace.json` to repo root
+   - Publish to Claude Code plugin marketplace
+
+5. **Phase 5: Documentation**
+   - Update README with plugin installation instructions
+   - Add migration guide for existing users
+   - Document slash command namespacing (`/ltm:remember` vs `/remember`)
+
+**Migration path:**
+- Existing setup.sh installations continue to work
+- Plugin installation can coexist or replace setup.sh
+- Data format unchanged (memories in `.claude/ltm/`)
+
+**Prerequisites:**
+- Claude Code 1.0.33+ (plugin system)
+- podman or docker installed
+
+---
+
 ## 11. Technical Debt
 
 ### TD-1: Container Auto-Stop Not Implemented
@@ -980,6 +1151,7 @@ To enable fast archive searching without reading all files:
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 1.5.0 | 2026-02-01 | Added FE-6 (Claude Code Plugin Distribution) for single-command installation |
 | 1.4.1 | 2026-02-01 | Added FE-5 (macOS and Windows Platform Support) for cross-platform migration |
 | 1.4.0 | 2026-02-01 | Added Future Enhancements section: FE-1 (Memory Compression with LLMlingua), FE-2 (Anthropic API Token Counting), FE-3 (Importance Tagging for Priority Boost), FE-4 (Archive Search and Recovery with ultrathink integration) |
 | 1.3.0 | 2026-01-29 | Added persistent container architecture with server mode; HTTP-based hooks via container; `ltm-start.sh` and `ltm-stop.sh` scripts; setup.sh for one-line installation; documented TD-1 (auto-stop not implemented) |
