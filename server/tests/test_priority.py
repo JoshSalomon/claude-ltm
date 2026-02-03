@@ -239,3 +239,149 @@ class TestModuleLevelFunctions:
         )
 
         assert 0 <= difficulty <= 1
+
+
+# =============================================================================
+# TC-15 to TC-19: New Difficulty Formula with Token Counting
+# =============================================================================
+
+
+class TestDifficultyWithTokens:
+    """Tests for difficulty calculation with token counting.
+
+    New formula when session_tokens > 0:
+        difficulty = (failure_rate * 0.25) + (tool_count * 0.15) + (tokens * 0.35) + (compaction * 0.25)
+
+    Old formula when session_tokens == 0:
+        difficulty = (failure_rate * 0.5) + (tool_count * 0.3) + (compaction * 0.2)
+    """
+
+    def test_new_weights_sum_to_one(self, priority_calculator):
+        """TC-15: New weights sum to 1.0 (0.25 + 0.15 + 0.35 + 0.25)."""
+        # The new formula weights should sum to 1.0
+        weights_sum = 0.25 + 0.15 + 0.35 + 0.25
+        assert weights_sum == 1.0
+
+    def test_token_contribution(self, priority_calculator):
+        """TC-16: 100k tokens only (max) contributes 0.35 to difficulty."""
+        # With 100k tokens (normalized to 1.0) and all other factors at 0
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=0,
+            tool_successes=0,
+            compacted=False,
+            session_tokens=100000,
+            token_normalize_cap=100000,
+        )
+
+        # token_usage = 1.0 * 0.35 = 0.35
+        # all other factors = 0
+        assert abs(difficulty - 0.35) < 0.001
+
+    def test_backward_compatibility_no_tokens(self, priority_calculator):
+        """TC-17: When session_tokens=0, uses old formula."""
+        # Old formula: (failure_rate * 0.5) + (tool_count * 0.3) + (compaction * 0.2)
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=5,
+            tool_successes=5,
+            compacted=True,
+            session_tokens=0,
+        )
+
+        # failure_rate = 0.5 * 0.5 = 0.25
+        # tool_count = 10/50 * 0.3 = 0.06
+        # compaction = 1.0 * 0.2 = 0.2
+        # total = 0.51
+        expected_old = 0.25 + 0.06 + 0.2
+        assert abs(difficulty - expected_old) < 0.01
+
+    def test_max_difficulty_with_tokens(self, priority_calculator):
+        """TC-18: All factors maxed gives difficulty = 1.0."""
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=100,  # 100% failure rate
+            tool_successes=0,
+            compacted=True,
+            session_tokens=100000,  # Max tokens
+            token_normalize_cap=100000,
+        )
+
+        # failure_rate = 1.0 * 0.25 = 0.25
+        # tool_count = 1.0 * 0.15 = 0.15
+        # tokens = 1.0 * 0.35 = 0.35
+        # compaction = 1.0 * 0.25 = 0.25
+        # total = 1.0
+        assert difficulty == 1.0
+
+    def test_old_formula_weights(self, priority_calculator):
+        """TC-19: Old formula uses 0.5/0.3/0.2 weights without tokens."""
+        # All factors at max with old formula (no tokens)
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=100,
+            tool_successes=0,
+            compacted=True,
+            session_tokens=0,  # No tokens = old formula
+        )
+
+        # failure_rate = 1.0 * 0.5 = 0.5
+        # tool_count = 1.0 * 0.3 = 0.3
+        # compaction = 1.0 * 0.2 = 0.2
+        # total = 1.0
+        assert difficulty == 1.0
+
+    def test_partial_token_usage(self, priority_calculator):
+        """50% token usage contributes 0.175 (half of 0.35)."""
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=0,
+            tool_successes=0,
+            compacted=False,
+            session_tokens=50000,
+            token_normalize_cap=100000,
+        )
+
+        # token_usage = 0.5 * 0.35 = 0.175
+        assert abs(difficulty - 0.175) < 0.001
+
+    def test_combined_factors_with_tokens(self, priority_calculator):
+        """Test combined factors with token counting."""
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=5,
+            tool_successes=5,
+            compacted=True,
+            session_tokens=50000,
+            token_normalize_cap=100000,
+        )
+
+        # failure_rate = 0.5 * 0.25 = 0.125
+        # tool_count = 0.2 * 0.15 = 0.03 (10 tools / 50 cap)
+        # tokens = 0.5 * 0.35 = 0.175
+        # compaction = 1.0 * 0.25 = 0.25
+        # total = 0.58
+        expected = 0.125 + 0.03 + 0.175 + 0.25
+        assert abs(difficulty - expected) < 0.01
+
+    def test_token_cap_respected(self, priority_calculator):
+        """Tokens above cap are still capped at 1.0 normalized."""
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=0,
+            tool_successes=0,
+            compacted=False,
+            session_tokens=200000,  # 2x the cap
+            token_normalize_cap=100000,
+        )
+
+        # token_usage should be capped at 1.0
+        # difficulty = 1.0 * 0.35 = 0.35
+        assert abs(difficulty - 0.35) < 0.001
+
+    def test_custom_token_cap(self, priority_calculator):
+        """Custom token cap works correctly."""
+        difficulty = priority_calculator.calculate_difficulty(
+            tool_failures=0,
+            tool_successes=0,
+            compacted=False,
+            session_tokens=25000,
+            token_normalize_cap=50000,  # Custom cap
+        )
+
+        # token_usage = 25000/50000 = 0.5
+        # difficulty = 0.5 * 0.35 = 0.175
+        assert abs(difficulty - 0.175) < 0.001

@@ -47,11 +47,6 @@ class TestCreateOperations:
         index = store._read_index()
         assert index["memories"][memory_id]["tags"] == sample_memory["tags"]
 
-        # Verify tag_index updated
-        for tag in sample_memory["tags"]:
-            assert tag in index["tag_index"]
-            assert memory_id in index["tag_index"][tag]
-
     def test_create_memory_with_difficulty(self, store, sample_memory):
         """Create memory with explicit difficulty."""
         memory_id = store.create(
@@ -197,11 +192,6 @@ class TestUpdateOperations:
         index = store._read_index()
         assert index["memories"][memory_id]["tags"] == ["new_tag", "another_tag"]
 
-        # Verify tag_index updated
-        assert "old_tag" not in index.get("tag_index", {})
-        assert memory_id in index["tag_index"]["new_tag"]
-        assert memory_id in index["tag_index"]["another_tag"]
-
     def test_update_memory_not_found(self, store):
         """Update non-existent memory raises error."""
         with pytest.raises(MemoryNotFoundError):
@@ -257,19 +247,6 @@ class TestDeleteOperations:
 
         index = store._read_index()
         assert memory_id not in index["memories"]
-
-    def test_delete_memory_removes_from_tag_index(self, store, sample_memory):
-        """Verify tag_index cleanup after delete."""
-        memory_id = store.create(
-            topic=sample_memory["topic"],
-            content=sample_memory["content"],
-            tags=["unique_tag"],
-        )
-
-        store.delete(memory_id)
-
-        index = store._read_index()
-        assert "unique_tag" not in index.get("tag_index", {})
 
     def test_delete_memory_removes_stats(self, store, sample_memory):
         """Verify stats cleanup after delete."""
@@ -722,7 +699,6 @@ class TestEdgeCases:
                     "created_at": "2026-01-01T00:00:00Z",
                 }
             },
-            "tag_index": {"test": ["mem_existing"]},
         }
         index_path = temp_ltm_dir / "index.json"
         with open(index_path, "w") as f:
@@ -755,6 +731,105 @@ class TestEdgeCases:
 
         assert state["session_count"] == 42
         assert state["compaction_count"] == 5
+
+    def test_read_state_merges_session_tokens_default(self, temp_ltm_dir):
+        """Existing state without session_tokens gets default merged in."""
+        # Pre-create state.json without session_tokens
+        state_data = {
+            "version": 1,
+            "session_count": 10,
+            "current_session": {"tool_failures": 5},
+            "compaction_count": 0,
+            "config": {},
+        }
+        state_path = temp_ltm_dir / "state.json"
+        with open(state_path, "w") as f:
+            json.dump(state_data, f)
+
+        store = MemoryStore(base_path=temp_ltm_dir)
+        state = store._read_state()
+
+        # Should have session_tokens default merged in
+        assert state["current_session"]["session_tokens"] == 0
+        # Original values preserved
+        assert state["current_session"]["tool_failures"] == 5
+
+    def test_read_state_merges_token_counting_config(self, temp_ltm_dir):
+        """Existing state without token_counting config gets defaults merged."""
+        # Pre-create state.json without token_counting
+        state_data = {
+            "version": 1,
+            "session_count": 5,
+            "current_session": {},
+            "compaction_count": 0,
+            "config": {"max_memories": 50},
+        }
+        state_path = temp_ltm_dir / "state.json"
+        with open(state_path, "w") as f:
+            json.dump(state_data, f)
+
+        store = MemoryStore(base_path=temp_ltm_dir)
+        state = store._read_state()
+
+        # Should have token_counting defaults merged in
+        assert "token_counting" in state["config"]
+        assert state["config"]["token_counting"]["enabled"] is True
+        assert state["config"]["token_counting"]["normalize_cap"] == 100000
+        # Original values preserved
+        assert state["config"]["max_memories"] == 50
+
+    def test_read_state_new_file_has_token_defaults(self, temp_ltm_dir):
+        """New state.json includes token counting defaults."""
+        store = MemoryStore(base_path=temp_ltm_dir)
+        state = store._read_state()
+
+        # Check session_tokens default
+        assert state["current_session"]["session_tokens"] == 0
+
+        # Check token_counting config defaults
+        assert state["config"]["token_counting"]["enabled"] is True
+        assert state["config"]["token_counting"]["normalize_cap"] == 100000
+
+    def test_read_state_missing_current_session_key(self, temp_ltm_dir):
+        """Existing state without current_session key gets default added."""
+        # Pre-create state.json without current_session
+        state_data = {
+            "version": 1,
+            "session_count": 5,
+            "compaction_count": 0,
+            "config": {},
+        }
+        state_path = temp_ltm_dir / "state.json"
+        with open(state_path, "w") as f:
+            json.dump(state_data, f)
+
+        store = MemoryStore(base_path=temp_ltm_dir)
+        state = store._read_state()
+
+        # Should have current_session with session_tokens default
+        assert "current_session" in state
+        assert state["current_session"]["session_tokens"] == 0
+
+    def test_read_state_missing_config_key(self, temp_ltm_dir):
+        """Existing state without config key gets defaults added."""
+        # Pre-create state.json without config
+        state_data = {
+            "version": 1,
+            "session_count": 5,
+            "current_session": {},
+            "compaction_count": 0,
+        }
+        state_path = temp_ltm_dir / "state.json"
+        with open(state_path, "w") as f:
+            json.dump(state_data, f)
+
+        store = MemoryStore(base_path=temp_ltm_dir)
+        state = store._read_state()
+
+        # Should have config with token_counting defaults
+        assert "config" in state
+        assert "token_counting" in state["config"]
+        assert state["config"]["token_counting"]["enabled"] is True
 
     def test_write_state(self, store):
         """Test _write_state method."""

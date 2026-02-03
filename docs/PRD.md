@@ -1,6 +1,6 @@
 # Long-Term Memory (LTM) System - Product Requirements Document
 
-**Version: 1.6.0 | Last Updated: 2026-02-02**
+**Version: 2.0.0 | Last Updated: 2026-02-03**
 
 ---
 
@@ -172,6 +172,7 @@ priority = (difficulty * 0.4) + (recency * 0.3) + (frequency * 0.3)
 | `ltm_status` | (none) | Get system status |
 | `ltm_check` | (none) | Check system integrity |
 | `ltm_fix` | `archive_orphans?`, `clean_orphaned_archives?` | Fix integrity issues |
+| `reset_tokens` | (none) | Reset token and tool counts for fresh topic |
 
 ### FR-9: Plugin Distribution
 
@@ -281,6 +282,7 @@ Claude Code slash commands provide a user-friendly interface to the LTM system. 
 | `/ltm:check` | Check LTM integrity (detect orphaned files and missing references) |
 | `/ltm:fix` | Fix LTM integrity issues (remove orphans, clean up broken references) |
 | `/ltm:fix --clean-archives` | Fix issues and also remove orphaned archive files |
+| `/ltm:reset` | Reset token and tool counts for a fresh start on a new topic |
 
 **Initialization (`/ltm:init`):**
 - Add proactive memory usage instructions to project's CLAUDE.md
@@ -300,6 +302,62 @@ Claude Code slash commands provide a user-friendly interface to the LTM system. 
 - Archive orphaned memory files before deletion (default: true)
 - With `--clean-archives`: also remove orphaned archive files
 - Return summary of actions taken
+
+**Token Reset (`/ltm:reset`):**
+- Reset session token count to zero
+- Reset tool success/failure counts to zero
+- Use when switching to a new topic or task within the same session
+- Prevents token accumulation from unrelated work affecting difficulty scores
+- Returns confirmation with previous counts
+
+### FR-11: Offline Token Counting for Complexity
+
+Token counting provides a more accurate measure of task complexity by measuring actual token usage in tool responses.
+
+**Implementation:**
+- Uses `transformers` library with `GPT2TokenizerFast.from_pretrained('Xenova/claude-tokenizer')`
+- Counts tokens in tool responses via PostToolUse hook
+- Accumulates token counts per session segment
+- Factors into difficulty score for memories created during that session
+
+**Token counting:**
+```python
+from transformers import GPT2TokenizerFast
+
+tokenizer = GPT2TokenizerFast.from_pretrained('Xenova/claude-tokenizer')
+
+# Count tokens in tool response
+token_count = len(tokenizer.encode(tool_response_text))
+
+# Accumulate per session segment
+session_tokens += token_count
+```
+
+**Updated difficulty formula:**
+```python
+difficulty = (
+    (tool_failure_rate * 0.25) +
+    (tool_count_normalized * 0.15) +
+    (token_usage_normalized * 0.35) +  # From offline tokenizer
+    (compaction_bonus * 0.25)
+)
+```
+
+**Configuration:**
+```python
+{
+  "token_counting": {
+    "enabled": True,  # Always enabled by default
+    "normalize_cap": 100000,  # Sessions with 100k+ tokens = 1.0 score
+  }
+}
+```
+
+**Key features:**
+- No API credentials required - fully offline
+- Deterministic token counting
+- `transformers` package (Apache 2.0 license, open source)
+- All token counting performed locally, no external API calls
 
 ---
 
@@ -763,64 +821,7 @@ This section documents planned features for future versions.
 
 ---
 
-### FE-2: Anthropic API Token Counting for Complexity
-
-**Status:** Planned
-
-**Problem:** Current difficulty scoring uses proxy metrics (tool failures, count). Actual token usage would be a more accurate measure of task complexity.
-
-**Solution:** Use the Anthropic API's token counting endpoint to measure tool response sizes and calculate complexity scores.
-
-**Implementation approach:**
-1. In PostToolUse hook, count tokens in `tool_response` using Anthropic's `count_tokens` API
-2. Accumulate token counts per session
-3. On SessionEnd, calculate normalized complexity from total tokens used
-4. Factor into difficulty score for memories created during that session
-
-**API usage:**
-```python
-import anthropic
-
-client = anthropic.Anthropic()
-
-# Count tokens in tool response
-token_count = client.count_tokens(
-    model="claude-sonnet-4-20250514",
-    messages=[{"role": "user", "content": tool_response_text}]
-)
-
-# Accumulate per session
-session_tokens += token_count.input_tokens
-```
-
-**Updated difficulty formula:**
-```python
-difficulty = (
-    (tool_failure_rate * 0.25) +
-    (tool_count_normalized * 0.15) +
-    (token_usage_normalized * 0.35) +  # From Anthropic API
-    (compaction_bonus * 0.25)
-)
-```
-
-**Configuration:**
-```python
-{
-  "token_counting": {
-    "enabled": True,
-    "model": "claude-sonnet-4-20250514",  # Model for token counting
-    "normalize_cap": 100000,  # Sessions with 100k+ tokens = 1.0 score
-  }
-}
-```
-
-**Dependencies:** `anthropic` package, API key with count_tokens access
-
-**Privacy note:** Tool responses are sent to Anthropic API for counting. Consider implications for sensitive data.
-
----
-
-### FE-3: Importance Tagging for Priority Boost
+### FE-2: Importance Tagging for Priority Boost
 
 **Status:** Planned
 
@@ -873,7 +874,7 @@ store_memory(
 
 ---
 
-### FE-4: Archive Search and Recovery
+### FE-3: Archive Search and Recovery
 
 **Status:** Planned
 
@@ -960,6 +961,70 @@ To enable fast archive searching without reading all files:
 
 ---
 
+### FE-4: Configurable Difficulty Formula Weights
+
+**Status:** Planned
+
+**Problem:** The difficulty formula uses hardcoded weights that may not suit all workflows. Some users may want to emphasize token usage over tool failures, or vice versa. The optimal weights may vary by project type (e.g., code-heavy vs. documentation-heavy work).
+
+**Solution:** Make the difficulty formula weights configurable via state.json.
+
+**Current hardcoded formula (with token counting):**
+```python
+difficulty = (
+    (failure_rate * 0.25) +
+    (tool_count * 0.15) +
+    (tokens * 0.35) +
+    (compaction * 0.25)
+)
+```
+
+**Configurable version:**
+```python
+# state.json
+{
+  "config": {
+    "difficulty_weights": {
+      "failure_rate": 0.25,
+      "tool_count": 0.15,
+      "tokens": 0.35,
+      "compaction": 0.25
+    }
+  }
+}
+```
+
+**Validation rules:**
+- All weights must be between 0.0 and 1.0
+- Weights must sum to 1.0 (or be normalized automatically)
+- Missing weights fall back to defaults
+
+**Preset profiles:**
+
+| Profile | failure_rate | tool_count | tokens | compaction | Use Case |
+|---------|--------------|------------|--------|------------|----------|
+| `balanced` (default) | 0.25 | 0.15 | 0.35 | 0.25 | General development |
+| `debugging` | 0.40 | 0.20 | 0.20 | 0.20 | Debug-heavy workflows |
+| `research` | 0.10 | 0.10 | 0.60 | 0.20 | Long research sessions |
+| `legacy` | 0.50 | 0.30 | 0.00 | 0.20 | No token counting |
+
+**Usage:**
+```bash
+# Use a preset profile
+/ltm:config difficulty_weights=debugging
+
+# Custom weights (must sum to 1.0)
+/ltm:config difficulty_weights.tokens=0.5 difficulty_weights.failure_rate=0.2 ...
+```
+
+**Implementation notes:**
+- Backward compatible: missing config uses hardcoded defaults
+- Weights are validated on load; invalid configs log warning and use defaults
+- When token counting is disabled, `tokens` weight is redistributed to other factors
+- Profile presets stored as constants, not in state.json
+
+---
+
 ### FE-5: macOS and Windows Platform Support
 
 **Status:** Planned
@@ -1018,6 +1083,61 @@ To enable fast archive searching without reading all files:
 
 ---
 
+### FE-6: Plugin Version and Installation Info in Status
+
+**Status:** Planned
+
+**Problem:** Users cannot see which version of the LTM plugin they're running when using `/ltm:status`. This makes debugging and feature compatibility difficult to assess.
+
+**Solution:** Display plugin installation information from `~/.claude/plugins/installed_plugins.json` in the `/ltm:status` output.
+
+**Information displayed:**
+
+| Field | Source | Description |
+|-------|--------|-------------|
+| Version | `installed_plugins.json` | Plugin version number |
+| Scope | `installed_plugins.json` | Installation scope (user, project) |
+| Install Path | `installed_plugins.json` | Where the plugin is installed |
+| Git Commit | `installed_plugins.json` | Short SHA of installed commit |
+
+**Implementation approach:**
+1. `run-mcp.sh` reads `~/.claude/plugins/installed_plugins.json` content
+2. Base64 encodes and passes to container as `LTM_INSTALLED_PLUGINS_B64` env var
+3. Python code in container decodes and parses JSON
+4. Extracts info for `ltm@claude-ltm` plugin entry
+5. Fallback to `plugin.json` in development mode (scope="development")
+
+**Expected output (installed):**
+```
+# LTM System Status
+
+## Plugin
+**Version:** 0.2.0
+**Scope:** user
+**Install Path:** /home/user/.claude/plugins/cache/claude-ltm/ltm/0.2.0
+**Git Commit:** 5dfd5671
+
+**Total Memories:** 3
+...
+```
+
+**Expected output (development):**
+```
+# LTM System Status
+
+## Plugin
+**Version:** 0.2.0
+**Scope:** development
+**Install Path:** /home/user/src/claude-ltm
+
+**Total Memories:** 3
+...
+```
+
+**Dependencies:** None (uses Python stdlib `base64` and `json` modules)
+
+---
+
 ## 11. Technical Debt
 
 ### TD-1: Tag Index Performance Optimization
@@ -1034,12 +1154,50 @@ To enable fast archive searching without reading all files:
 
 Both options provide O(1) tag lookups while avoiding git conflicts.
 
+### TD-2: MCP Server Tool Count Reduction
+
+**Status:** Open
+
+**Description:** The MCP server currently exposes 9 tools (`store_memory`, `recall`, `list_memories`, `get_memory`, `forget`, `ltm_status`, `ltm_check`, `ltm_fix`, `reset_tokens`). This may be excessive and could clutter the tool namespace for Claude.
+
+**Considerations:**
+
+1. **Consolidate management tools** - Combine `ltm_status`, `ltm_check`, `ltm_fix`, `reset_tokens` into a single `ltm_manage` tool with an `action` parameter.
+
+2. **Consolidate memory tools** - Combine `list_memories` and `get_memory` into `recall` with optional `memory_id` parameter.
+
+3. **Remove rarely-used tools** - Evaluate usage patterns and remove tools that are seldom called.
+
+4. **Keep separate** - If tool separation improves discoverability and reduces errors, the current design may be acceptable.
+
+**Impact:** Reducing tool count simplifies the MCP interface but may reduce clarity of tool purposes. Consider user feedback before consolidating.
+
+### TD-3: Port Availability Check Regex Portability
+
+**Status:** Deferred
+
+**Description:** The port availability check in `run-mcp.sh` uses `grep -qE ":${port}[[:space:]]"` to detect if a port is in use. This regex requires whitespace after the port number, which works on Linux (ss/netstat output) but may have false negatives on other systems that format output differently (e.g., with tabs, no trailing whitespace, or different column layouts).
+
+**Current behavior:** If the regex fails to detect an in-use port, the container will fail to start with a "port already in use" error, and the script will not automatically try another port.
+
+**Future fix for cross-platform support:**
+```bash
+# More robust pattern that handles end-of-line
+grep -qE ":${port}([[:space:]]|$)"
+```
+
+**When to address:** When implementing FE-5 (macOS and Windows Platform Support).
+
 ---
 
 ## 12. Changelog
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.0.2 | 2026-02-05 | PR review fixes: TD-3 (Port Regex Portability), improved /ltm:reset documentation, fixed hooks_task NameError, store_memory now respects provided difficulty parameter, removed unused pytest import |
+| 2.0.1 | 2026-02-04 | Added FE-6 (Plugin Version and Installation Info in Status) |
+| 2.0.0 | 2026-02-03 | Implemented FR-11 (Offline Token Counting) using Xenova/claude-tokenizer; moved from FE-2 to FR-11; renumbered FE-3→FE-2, FE-4→FE-3, FE-5→FE-4, FE-6→FE-5; removed all API credential requirements; added --with-hooks flag for stdio mode with HTTP hooks |
+| 1.6.1 | 2026-02-03 | Added FE-5 (Configurable Difficulty Formula Weights); renumbered FE-5 (Platform Support) to FE-6; added TD-2 (MCP Server Tool Count Reduction) |
 | 1.6.0 | 2026-02-02 | Implemented FR-9 (Plugin Distribution) - plugin now installable from GitHub via marketplace; FR-10 (Slash Commands) now uses `ltm:` namespace; removed TD-1 and Technical Debt section; removed FE-6 from Future Enhancements |
 | 1.5.0 | 2026-02-01 | Added FE-6 (Claude Code Plugin Distribution) for single-command installation |
 | 1.4.1 | 2026-02-01 | Added FE-5 (macOS and Windows Platform Support) for cross-platform migration |

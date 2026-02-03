@@ -24,6 +24,7 @@ LTM Commands:
   /ltm:check                 Check system integrity
   /ltm:fix                   Fix integrity issues
   /ltm:fix --clean-archives  Also remove orphaned archives
+  /ltm:reset                 Reset token counts (start fresh topic)
 
   /ltm:remember [topic]      Store a new memory
   /ltm:recall <query>        Search memories

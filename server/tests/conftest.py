@@ -4,15 +4,16 @@ from __future__ import annotations
 
 import json
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 
 import pytest
 
-import sys
-
-# Add parent directory to path for imports
-sys.path.insert(0, str(Path(__file__).parent.parent))
+# Add server directory to path for imports
+# tests are at: server/tests/ -> go up one level to server/
+_server_path = Path(__file__).parent.parent
+sys.path.insert(0, str(_server_path))
 
 from store import MemoryStore
 from priority import PriorityCalculator
@@ -94,13 +95,6 @@ def sample_index():
                 "difficulty": 0.3,
                 "created_at": "2026-01-01T09:00:00Z",
             },
-        },
-        "tag_index": {
-            "database": ["mem_test001"],
-            "performance": ["mem_test001"],
-            "api": ["mem_test002"],
-            "security": ["mem_test002", "mem_test003"],
-            "auth": ["mem_test003"],
         },
     }
 

@@ -51,6 +51,21 @@
       "phase": 0,
       "difficulty": 0.7,
       "created_at": "2026-02-02T10:14:04.088843+00:00"
+    },
+    "mem_896024eb": {
+      "topic": "LTM Server Architecture: stdio MCP + HTTP hooks",
+      "tags": [
+        "architecture",
+        "mcp",
+        "hooks",
+        "container",
+        "networking",
+        "stdio",
+        "http"
+      ],
+      "phase": 0,
+      "difficulty": 0.5,
+      "created_at": "2026-02-03T19:01:57.871957+00:00"
     }
   }
 }
