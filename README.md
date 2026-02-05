@@ -26,8 +26,6 @@ A persistent memory system for [Claude Code](https://claude.ai/code) that enable
 
 ### Installation
 
-**DO not install - current version does not install properly - check this site soon**
-
 Install LTM as a Claude Code plugin directly from GitHub:
 
 ```bash
