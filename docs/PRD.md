@@ -1089,7 +1089,8 @@ difficulty = (
 
 **Problem:** Users cannot see which version of the LTM plugin they're running when using `/ltm:status`. This makes debugging and feature compatibility difficult to assess.
 
-**Solution:** Display plugin installation information from `~/.claude/plugins/installed_plugins.json` in the `/ltm:status` output.
+**Solution:** Display plugin installation information from `~/.claude/plugin
+1s/installed_plugins.json` in the `/ltm:status` output.
 
 **Information displayed:**
 
@@ -1224,9 +1225,14 @@ The local `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}` which is only set for install
 
 **Impact:** Low - The installed plugin works correctly. The failing local entry is cosmetic noise.
 
-**Possible fixes:**
+**Workaround:** For development, run Claude with environment variables:
+```bash
+CLAUDE_PLUGIN_ROOT=. LTM_MCP_IMAGE=localhost/ltm-mcp-server:latest claude
+```
+
+**Possible permanent fixes:**
 1. Add local `.mcp.json` to `.gitignore` and use a different name
-2. Disable the local ltm server in project settings
+2. Disable the local ltm server in project settings (current approach)
 3. Accept this as expected behavior for plugin development
 
 ---
