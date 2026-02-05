@@ -1172,7 +1172,29 @@ Both options provide O(1) tag lookups while avoiding git conflicts.
 
 **Impact:** Reducing tool count simplifies the MCP interface but may reduce clarity of tool purposes. Consider user feedback before consolidating.
 
-### TD-3: Port Availability Check Regex Portability
+### TD-3: Plugin Version Not Displayed in /ltm:status
+
+**Status:** Open
+
+**Description:** FE-6 (Plugin Version and Installation Info) was implemented but the `/ltm:status` command does not display the plugin version section. The implementation passes `LTM_INSTALLED_PLUGINS_B64` and `LTM_PLUGIN_JSON_B64` environment variables to the container, and the Python code parses them, but the Plugin section is not appearing in the output.
+
+**Symptoms:**
+- `/ltm:status` shows all other sections but no "## Plugin" section
+- `PLUGIN_INFO` dict may have default "unknown" values
+
+**Investigation needed:**
+1. Verify environment variables are being passed correctly to container
+2. Check if base64 encoding/decoding is working
+3. Verify `_get_plugin_info()` is finding the ltm plugin entry
+4. Check if `PLUGIN_INFO` is populated at module load time
+
+**Files involved:**
+- `scripts/run-mcp.sh` - Sets environment variables
+- `server/mcp_server.py` - `_get_plugin_info()` function and `handle_ltm_status()`
+
+---
+
+### TD-4: Port Availability Check Regex Portability
 
 **Status:** Deferred
 
@@ -1190,11 +1212,31 @@ grep -qE ":${port}([[:space:]]|$)"
 
 ---
 
+### TD-5: Local .mcp.json Fails in Plugin Development Directory
+
+**Status:** Open
+
+**Description:** When working in the claude-ltm directory (plugin source), `claude mcp list` shows two ltm entries:
+1. `plugin:ltm:ltm` - Works (from installed plugin)
+2. `ltm` - Fails (from local `.mcp.json`)
+
+The local `.mcp.json` uses `${CLAUDE_PLUGIN_ROOT}` which is only set for installed plugins, not for project-level `.mcp.json` files. This causes the local entry to fail with "Failed to connect".
+
+**Impact:** Low - The installed plugin works correctly. The failing local entry is cosmetic noise.
+
+**Possible fixes:**
+1. Add local `.mcp.json` to `.gitignore` and use a different name
+2. Disable the local ltm server in project settings
+3. Accept this as expected behavior for plugin development
+
+---
+
 ## 12. Changelog
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.0.2 | 2026-02-05 | PR review fixes: TD-3 (Port Regex Portability), improved /ltm:reset documentation, fixed hooks_task NameError, store_memory now respects provided difficulty parameter, removed unused pytest import |
+| 2.0.3 | 2026-02-05 | Added TD-3 (Plugin Version Not Displayed), TD-5 (Local .mcp.json Fails); renumbered TD-3→TD-4 |
+| 2.0.2 | 2026-02-05 | PR review fixes: TD-4 (Port Regex Portability), improved /ltm:reset documentation, fixed hooks_task NameError, store_memory now respects provided difficulty parameter, removed unused pytest import |
 | 2.0.1 | 2026-02-04 | Added FE-6 (Plugin Version and Installation Info in Status) |
 | 2.0.0 | 2026-02-03 | Implemented FR-11 (Offline Token Counting) using Xenova/claude-tokenizer; moved from FE-2 to FR-11; renumbered FE-3→FE-2, FE-4→FE-3, FE-5→FE-4, FE-6→FE-5; removed all API credential requirements; added --with-hooks flag for stdio mode with HTTP hooks |
 | 1.6.1 | 2026-02-03 | Added FE-5 (Configurable Difficulty Formula Weights); renumbered FE-5 (Platform Support) to FE-6; added TD-2 (MCP Server Tool Count Reduction) |
