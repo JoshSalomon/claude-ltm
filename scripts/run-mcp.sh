@@ -61,8 +61,28 @@ cleanup() {
 }
 trap cleanup EXIT
 
+# Read installed plugins file content (for installed plugin mode)
+PLUGINS_FILE="${HOME}/.claude/plugins/installed_plugins.json"
+if [ -f "$PLUGINS_FILE" ]; then
+    INSTALLED_PLUGINS_B64=$(cat "$PLUGINS_FILE" | base64 -w0)
+else
+    INSTALLED_PLUGINS_B64=""
+fi
+
+# Read plugin.json content (for development mode)
+# Try CLAUDE_PLUGIN_ROOT first, then PROJECT_ROOT
+if [ -n "${CLAUDE_PLUGIN_ROOT:-}" ] && [ -f "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" ]; then
+    PLUGIN_JSON_B64=$(cat "${CLAUDE_PLUGIN_ROOT}/.claude-plugin/plugin.json" | base64 -w0)
+elif [ -f "${PROJECT_ROOT}/.claude-plugin/plugin.json" ]; then
+    PLUGIN_JSON_B64=$(cat "${PROJECT_ROOT}/.claude-plugin/plugin.json" | base64 -w0)
+else
+    PLUGIN_JSON_B64=""
+fi
+
 # Build environment variable arguments
 ENV_ARGS="-e LTM_HOST_PATH=${DATA_DIR}"
+[ -n "$INSTALLED_PLUGINS_B64" ] && ENV_ARGS="$ENV_ARGS -e LTM_INSTALLED_PLUGINS_B64=${INSTALLED_PLUGINS_B64}"
+[ -n "$PLUGIN_JSON_B64" ] && ENV_ARGS="$ENV_ARGS -e LTM_PLUGIN_JSON_B64=${PLUGIN_JSON_B64}"
 
 # Build volume mount arguments
 VOL_ARGS="-v ${DATA_DIR}:/data:Z"

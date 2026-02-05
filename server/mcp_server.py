@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import base64
 import json
 import os
 import sys
@@ -51,6 +52,59 @@ _token_counter: TokenCounter = TokenCounter(store._read_state().get("config", {}
 
 # Global shutdown event for server mode
 shutdown_event = asyncio.Event()
+
+
+def _get_plugin_info() -> dict:
+    """Extract plugin info from environment variables.
+
+    Checks LTM_INSTALLED_PLUGINS_B64 (installed plugin) and
+    LTM_PLUGIN_JSON_B64 (development mode) environment variables.
+    """
+    info = {
+        "version": "unknown",
+        "scope": "unknown",
+        "install_path": "",
+        "git_sha": "",
+    }
+
+    # Try installed_plugins.json first (for installed plugins)
+    installed_b64 = os.environ.get("LTM_INSTALLED_PLUGINS_B64", "")
+    if installed_b64:
+        try:
+            installed = json.loads(base64.b64decode(installed_b64).decode())
+            # Look for ltm plugin - key format is "ltm@<repo-name>"
+            plugins = installed.get("plugins", {})
+            for key, entries in plugins.items():
+                if key.startswith("ltm@") and entries:
+                    entry = entries[0]  # Get first (most recent) entry
+                    info["version"] = entry.get("version", "unknown")
+                    info["scope"] = entry.get("scope", "unknown")
+                    info["install_path"] = entry.get("installPath", "")
+                    info["git_sha"] = entry.get("gitCommitSha", "")
+                    return info
+        except Exception:
+            pass
+
+    # Fallback to plugin.json (for development mode)
+    plugin_b64 = os.environ.get("LTM_PLUGIN_JSON_B64", "")
+    if plugin_b64:
+        try:
+            plugin = json.loads(base64.b64decode(plugin_b64).decode())
+            info["version"] = plugin.get("version", "unknown")
+            info["scope"] = "development"
+            # Extract project path from LTM_HOST_PATH (remove /data suffix)
+            host_path = os.environ.get("LTM_HOST_PATH", "")
+            if host_path.endswith("/.claude/ltm"):
+                info["install_path"] = host_path[:-12]  # Remove "/.claude/ltm"
+            return info
+        except Exception:
+            pass
+
+    return info
+
+
+# Get plugin info at module load
+PLUGIN_INFO = _get_plugin_info()
 
 
 def _extract_tags(topic: str, content: str) -> list[str]:
@@ -476,6 +530,18 @@ async def handle_ltm_status(args: dict) -> list[TextContent]:
     archive_count = len(list(archives_path.glob("*.md"))) if archives_path.exists() else 0
 
     output = "# LTM System Status\n\n"
+
+    # Plugin info section
+    output += "## Plugin\n"
+    output += f"**Version:** {PLUGIN_INFO['version']}\n"
+    if PLUGIN_INFO['scope'] != "unknown":
+        output += f"**Scope:** {PLUGIN_INFO['scope']}\n"
+    if PLUGIN_INFO['install_path']:
+        output += f"**Install Path:** {PLUGIN_INFO['install_path']}\n"
+    if PLUGIN_INFO['git_sha']:
+        output += f"**Git Commit:** {PLUGIN_INFO['git_sha'][:8]}\n"
+    output += "\n"
+
     output += f"**Total Memories:** {len(memories)}\n"
     output += f"**Archived:** {archive_count}\n"
     output += f"**Session Count:** {state.get('session_count', 0)}\n\n"
