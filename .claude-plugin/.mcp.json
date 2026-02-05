@@ -1,8 +1,0 @@
-{
-  "mcpServers": {
-    "ltm": {
-      "command": "bash",
-      "args": ["./scripts/run-mcp.sh"]
-    }
-  }
-}

@@ -1,6 +1,6 @@
 # Claude LTM - Long-Term Memory for Claude Code
 
-[![Version](https://img.shields.io/badge/version-0.2.2-blue.svg)](https://github.com/JoshSalomon/claude-ltm/releases)
+[![Version](https://img.shields.io/badge/version-0.2.3-blue.svg)](https://github.com/JoshSalomon/claude-ltm/releases)
 [![Container](https://img.shields.io/badge/container-quay.io-red.svg)](https://quay.io/repository/jsalomon/ltm-mcp-server)
 [![License](https://img.shields.io/badge/license-Apache%202.0-green.svg)](LICENSE)
 
