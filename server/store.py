@@ -474,21 +474,43 @@ class MemoryStore:
         if self._state_cache is not None:
             return self._state_cache
 
+        # Default state structure
+        default_state = {
+            "version": 1,
+            "session_count": 1,
+            "current_session": {
+                "session_tokens": 0,
+            },
+            "compaction_count": 0,
+            "config": {
+                "max_memories": 100,
+                "memories_to_load": 10,
+                "eviction_batch_size": 10,
+                "token_counting": {
+                    "enabled": True,
+                    "normalize_cap": 100000,
+                },
+            },
+        }
+
         if self.state_path.exists():
             with open(self.state_path, "r", encoding="utf-8") as f:
                 self._state_cache = json.load(f)
+
+            # Merge defaults for missing fields
+            if "current_session" not in self._state_cache:
+                self._state_cache["current_session"] = {}
+            if "session_tokens" not in self._state_cache["current_session"]:
+                self._state_cache["current_session"]["session_tokens"] = 0
+
+            if "config" not in self._state_cache:
+                self._state_cache["config"] = {}
+            if "token_counting" not in self._state_cache["config"]:
+                self._state_cache["config"]["token_counting"] = (
+                    default_state["config"]["token_counting"]
+                )
         else:
-            self._state_cache = {
-                "version": 1,
-                "session_count": 1,
-                "current_session": {},
-                "compaction_count": 0,
-                "config": {
-                    "max_memories": 100,
-                    "memories_to_load": 10,
-                    "eviction_batch_size": 10,
-                },
-            }
+            self._state_cache = default_state
 
         return self._state_cache
 

@@ -21,6 +21,7 @@ from mcp_server import (
     handle_ltm_status,
     handle_ltm_check,
     handle_ltm_fix,
+    handle_reset_tokens,
     _extract_tags,
     store,
 )
@@ -144,7 +145,7 @@ class TestStoreMemoryTool:
         assert "tags:" in text
 
     async def test_store_memory_with_difficulty(self, clean_store):
-        """Store memory with difficulty score."""
+        """Store memory with provided difficulty score (overrides auto-calculation)."""
         result = await handle_store_memory({
             "topic": "Hard problem",
             "content": "Solved a complex issue",
@@ -153,6 +154,53 @@ class TestStoreMemoryTool:
 
         text = result[0].text
         assert "success: True" in text
+        # Provided difficulty should be used instead of calculated
+        assert "difficulty: 0.9" in text
+
+    async def test_store_memory_difficulty_clamped(self, clean_store):
+        """Provided difficulty is clamped to 0.0-1.0 range."""
+        # Test above 1.0
+        result = await handle_store_memory({
+            "topic": "Over limit",
+            "content": "Content",
+            "difficulty": 1.5,
+        })
+        text = result[0].text
+        assert "difficulty: 1.0" in text
+
+        # Test below 0.0
+        result = await handle_store_memory({
+            "topic": "Under limit",
+            "content": "Content",
+            "difficulty": -0.5,
+        })
+        text = result[0].text
+        assert "difficulty: 0.0" in text
+
+    async def test_store_memory_auto_calculates_difficulty(self, clean_store):
+        """Without provided difficulty, difficulty is auto-calculated from session metrics."""
+        # Set up session state with metrics that would produce non-zero difficulty
+        state = store._read_state()
+        state["current_session"]["tool_failures"] = 5
+        state["current_session"]["tool_successes"] = 5
+        state["current_session"]["session_tokens"] = 50000
+        store._write_state(state)
+
+        result = await handle_store_memory({
+            "topic": "Auto difficulty",
+            "content": "Content",
+        })
+
+        text = result[0].text
+        assert "success: True" in text
+        # Should have calculated difficulty > 0 due to session metrics
+        assert "difficulty:" in text
+        # Extract the difficulty value
+        for line in text.split("\n"):
+            if line.startswith("difficulty:"):
+                difficulty = float(line.split(":")[1].strip())
+                assert difficulty > 0  # Should be non-zero due to metrics
+                break
 
 
 @pytest.mark.asyncio
@@ -404,6 +452,114 @@ class TestLtmStatusTool:
         assert "2" in text
         assert "Full (0):" in text
 
+    async def test_ltm_status_includes_token_counting_section(self, clean_store):
+        """Status includes token counting section."""
+        result = await handle_ltm_status({})
+
+        text = result[0].text
+        assert "Token Counting" in text
+        assert "Current segment tokens:" in text
+        assert "Tool calls:" in text
+        assert "Estimated difficulty:" in text
+
+    async def test_ltm_status_shows_token_counting_enabled(self, clean_store):
+        """Status shows token counting enabled with offline tokenizer."""
+        result = await handle_ltm_status({})
+
+        text = result[0].text
+        # With offline Xenova tokenizer, should always show enabled
+        assert "Enabled" in text
+        assert "offline tokenizer" in text
+
+    async def test_ltm_status_shows_session_metrics(self, clean_store):
+        """Status shows current session metrics."""
+        # Set up some session state
+        state = store._read_state()
+        state["current_session"]["session_tokens"] = 5000
+        state["current_session"]["tool_failures"] = 2
+        state["current_session"]["tool_successes"] = 10
+        store._write_state(state)
+
+        result = await handle_ltm_status({})
+
+        text = result[0].text
+        assert "5,000" in text or "5000" in text  # Tokens shown
+        assert "10" in text  # Successes
+        assert "2" in text  # Failures
+
+
+@pytest.mark.asyncio
+class TestResetTokensTool:
+    """Tests for reset_tokens tool."""
+
+    async def test_reset_tokens_resets_session_tokens(self, clean_store):
+        """reset_tokens sets session_tokens to 0."""
+        # Set up session state with tokens
+        state = store._read_state()
+        state["current_session"]["session_tokens"] = 10000
+        store._write_state(state)
+
+        await handle_reset_tokens({})
+
+        state = store._read_state()
+        assert state["current_session"]["session_tokens"] == 0
+
+    async def test_reset_tokens_resets_tool_counts(self, clean_store):
+        """reset_tokens sets tool counts to 0."""
+        # Set up session state with tool counts
+        state = store._read_state()
+        state["current_session"]["tool_failures"] = 5
+        state["current_session"]["tool_successes"] = 20
+        store._write_state(state)
+
+        await handle_reset_tokens({})
+
+        state = store._read_state()
+        assert state["current_session"]["tool_failures"] == 0
+        assert state["current_session"]["tool_successes"] == 0
+
+    async def test_reset_tokens_returns_before_after_info(self, clean_store):
+        """reset_tokens returns before and after state."""
+        # Set up session state
+        state = store._read_state()
+        state["current_session"]["session_tokens"] = 25000
+        state["current_session"]["tool_failures"] = 3
+        state["current_session"]["tool_successes"] = 15
+        store._write_state(state)
+
+        result = await handle_reset_tokens({})
+
+        text = result[0].text
+        assert "Before" in text
+        assert "After" in text
+        assert "25,000" in text or "25000" in text  # Before tokens
+        assert "Ready for new topic" in text
+
+    async def test_reset_tokens_shows_estimated_difficulty(self, clean_store):
+        """reset_tokens shows estimated difficulty before reset."""
+        # Set up session state
+        state = store._read_state()
+        state["current_session"]["session_tokens"] = 50000
+        state["current_session"]["tool_failures"] = 2
+        state["current_session"]["tool_successes"] = 8
+        store._write_state(state)
+
+        result = await handle_reset_tokens({})
+
+        text = result[0].text
+        assert "Estimated difficulty:" in text
+        # After reset, difficulty should be 0.000
+        assert "0.000" in text
+
+    async def test_reset_tokens_call_tool_dispatch(self, clean_store):
+        """call_tool routes to reset_tokens."""
+        from mcp_server import call_tool
+
+        result = await call_tool("reset_tokens", {})
+
+        assert len(result) == 1
+        assert "Token Segment Reset" in result[0].text
+
 
 @pytest.mark.asyncio
 class TestCallToolDispatcher:
@@ -513,12 +669,12 @@ class TestListToolsFunction:
     """Tests for list_tools function."""
 
     async def test_list_tools_returns_all_tools(self):
-        """list_tools returns all 6 tools."""
+        """list_tools returns all 9 tools."""
         from mcp_server import list_tools
 
         tools = await list_tools()
 
-        assert len(tools) == 8
+        assert len(tools) == 9
         tool_names = [t.name for t in tools]
         assert "store_memory" in tool_names
         assert "recall" in tool_names
@@ -528,6 +684,7 @@ class TestListToolsFunction:
         assert "ltm_status" in tool_names
         assert "ltm_check" in tool_names
         assert "ltm_fix" in tool_names
+        assert "reset_tokens" in tool_names
 
 
 @pytest.mark.asyncio

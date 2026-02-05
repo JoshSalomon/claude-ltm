@@ -389,19 +389,19 @@ For contributing or testing changes locally:
 # Clone the repository
 git clone https://github.com/JoshSalomon/claude-ltm.git
 cd claude-ltm
-
-# Run Claude Code with the local plugin
-claude --plugin-dir .
 ```
 
-### Building the Container Locally
+### Building and Testing Container Changes
+
+When modifying the MCP server code, build and test with a local container:
 
 ```bash
-# Build from repo root
-podman build -t quay.io/jsalomon/ltm-mcp-server:latest .
+# Build local image
+podman build -t localhost/ltm-mcp-server:latest .
+# Or: docker build -t localhost/ltm-mcp-server:latest .
 
-# Or with docker
-docker build -t quay.io/jsalomon/ltm-mcp-server:latest .
+# Run Claude Code with the local image
+LTM_MCP_IMAGE=localhost/ltm-mcp-server:latest claude --plugin-dir .
 ```
 
 ### Running Tests
@@ -414,10 +414,10 @@ pip install -r server/requirements.txt
 pip install pytest pytest-cov pytest-asyncio
 
 # Run tests
-pytest .claude/ltm/tests/
+pytest server/tests/
 
 # Run with coverage
-pytest .claude/ltm/tests/ --cov=server --cov-report=term-missing
+pytest server/tests/ --cov=server --cov-report=term-missing
 ```
 
 ### Project Structure
@@ -430,7 +430,15 @@ claude-ltm/
 │   ├── store.py
 │   ├── priority.py
 │   ├── eviction.py
-│   └── requirements.txt
+│   ├── token_counter.py
+│   ├── requirements.txt
+│   └── tests/                # Test suite
+│       ├── conftest.py
+│       ├── test_store.py
+│       ├── test_priority.py
+│       ├── test_eviction.py
+│       ├── test_mcp_server.py
+│       └── test_token_counter.py
 ├── hooks/                    # Hook scripts
 │   ├── hooks.json
 │   └── *.sh

@@ -48,6 +48,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY server/priority.py .
 COPY server/store.py .
 COPY server/eviction.py .
+COPY server/token_counter.py .
 COPY server/mcp_server.py .
 
 # Create non-root user for security
@@ -71,7 +72,7 @@ EXPOSE 8765 9999
 
 # Health check - verify Python and mcp are available
 HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
-    CMD python -c "import mcp; import store; import priority; print('OK')" || exit 1
+    CMD python -c "import mcp; import store; import priority; import token_counter; print('OK')" || exit 1
 
 # Default command runs the MCP server in stdio mode
 # Use --server for persistent server mode

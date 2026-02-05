@@ -4,8 +4,8 @@ These tests verify the container build and functionality.
 Requires podman to be installed and the container image to be built.
 
 To run these tests:
-    1. Build the container: podman build -t ltm-mcp-server .claude/ltm/
-    2. Run the tests: pytest .claude/ltm/tests/test_container.py -v
+    1. Build the container: podman build -t ltm-mcp-server .
+    2. Run the tests: pytest server/tests/test_container.py -v
 """
 
 from __future__ import annotations
@@ -81,7 +81,11 @@ class TestContainerBuild:
 
     @pytest.mark.skipif(not image_exists(), reason="Image not built")
     def test_image_size(self):
-        """Verify image is reasonably sized (< 200MB)."""
+        """Verify image is reasonably sized (< 450MB).
+
+        Note: Size increased after adding transformers library for offline
+        token counting with Xenova/claude-tokenizer.
+        """
         result = subprocess.run(
             ["podman", "images", "ltm-mcp-server:latest", "--format", "{{.Size}}"],
             capture_output=True,
@@ -94,7 +98,8 @@ class TestContainerBuild:
         # Parse size (e.g., "169 MB")
         if "MB" in size_str:
             size_mb = float(size_str.replace("MB", "").strip())
-            assert size_mb < 200, f"Image too large: {size_mb} MB"
+            # Transformers library is larger; 450 MB is reasonable
+            assert size_mb < 450, f"Image too large: {size_mb} MB"
         elif "GB" in size_str:
             pytest.fail(f"Image too large: {size_str}")
 
@@ -109,7 +114,7 @@ class TestContainerModules:
             [
                 "podman", "run", "--rm", "--entrypoint", "python",
                 "ltm-mcp-server",
-                "-c", "import mcp; import store; import priority; print('OK')"
+                "-c", "import mcp; import store; import priority; import token_counter; print('OK')"
             ],
             capture_output=True,
             text=True,
@@ -401,3 +406,172 @@ print(f'session:{state.get(\"session_count\", 0)}')
 
         assert result.returncode == 0
         assert "total:2" in result.stdout
+
+
+@pytest.mark.skipif(not image_exists(), reason="Image not built")
+class TestContainerTokenCounting:
+    """Tests for token counting functionality in container."""
+
+    def test_token_counter_module_loads(self, temp_data_dir):
+        """TokenCounter module loads correctly in container with offline tokenizer."""
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id",
+                "--entrypoint", "python",
+                "-v", f"{temp_data_dir}:/data:Z",
+                "ltm-mcp-server",
+                "-c", """
+from token_counter import TokenCounter
+tc = TokenCounter()
+print(f'enabled:{tc.is_enabled()}')
+"""
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, f"Failed: {result.stderr}"
+        # With offline Xenova tokenizer, should always be enabled
+        assert "enabled:True" in result.stdout
+
+    def test_token_counter_counts_tokens(self, temp_data_dir):
+        """TokenCounter counts tokens with offline tokenizer."""
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id",
+                "--entrypoint", "python",
+                "-v", f"{temp_data_dir}:/data:Z",
+                "ltm-mcp-server",
+                "-c", """
+from token_counter import TokenCounter
+tc = TokenCounter()
+# Should return actual token count with offline tokenizer
+count = tc.count_tokens("Hello world")
+print(f'count:{count}')
+"""
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, f"Failed: {result.stderr}"
+        # "Hello world" = 2 tokens with Xenova tokenizer
+        assert "count:2" in result.stdout
+
+    def test_state_includes_token_counting_defaults(self, temp_data_dir):
+        """State includes token counting configuration defaults."""
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id",
+                "--entrypoint", "python",
+                "-v", f"{temp_data_dir}:/data:Z",
+                "ltm-mcp-server",
+                "-c", """
+from store import MemoryStore
+store = MemoryStore()
+state = store._read_state()
+config = state.get('config', {})
+tc_config = config.get('token_counting', {})
+print(f'enabled:{tc_config.get("enabled")}')
+print(f'normalize_cap:{tc_config.get("normalize_cap")}')
+session = state.get('current_session', {})
+print(f'session_tokens:{session.get("session_tokens")}')
+"""
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, f"Failed: {result.stderr}"
+        assert "enabled:True" in result.stdout
+        assert "normalize_cap:100000" in result.stdout
+        assert "session_tokens:0" in result.stdout
+
+    def test_priority_calculator_with_tokens(self, temp_data_dir):
+        """Priority calculator uses token-based formula in container."""
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id",
+                "--entrypoint", "python",
+                "-v", f"{temp_data_dir}:/data:Z",
+                "ltm-mcp-server",
+                "-c", """
+from priority import calculate_difficulty
+
+# With tokens (new formula)
+diff_with_tokens = calculate_difficulty(
+    tool_failures=2,
+    tool_successes=8,
+    compacted=False,
+    session_tokens=50000,
+    token_normalize_cap=100000,
+)
+
+# Without tokens (old formula)
+diff_without_tokens = calculate_difficulty(
+    tool_failures=2,
+    tool_successes=8,
+    compacted=False,
+    session_tokens=0,
+)
+
+print(f'with_tokens:{diff_with_tokens:.3f}')
+print(f'without_tokens:{diff_without_tokens:.3f}')
+"""
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, f"Failed: {result.stderr}"
+        # With 50k tokens (50% of cap), token_usage contributes 0.175 (0.35 * 0.5)
+        # failure_rate = 2/10 = 0.2, contributes 0.05 (0.25 * 0.2)
+        # tool_count = 10/50 = 0.2, contributes 0.03 (0.15 * 0.2)
+        # compaction = 0
+        # Total with tokens: ~0.255
+        assert "with_tokens:0.255" in result.stdout
+
+        # Without tokens: failure_rate * 0.5 + tool_count * 0.3
+        # = 0.2 * 0.5 + 0.2 * 0.3 = 0.1 + 0.06 = 0.16
+        assert "without_tokens:0.160" in result.stdout
+
+    def test_session_state_token_tracking(self, temp_data_dir):
+        """Session state tracks tokens correctly."""
+        result = subprocess.run(
+            [
+                "podman", "run", "--rm", "--userns=keep-id",
+                "--entrypoint", "python",
+                "-v", f"{temp_data_dir}:/data:Z",
+                "ltm-mcp-server",
+                "-c", """
+from store import MemoryStore
+store = MemoryStore()
+
+# Simulate token accumulation
+state = store._read_state()
+state['current_session']['session_tokens'] = 25000
+state['current_session']['tool_failures'] = 3
+state['current_session']['tool_successes'] = 12
+store._write_state(state)
+
+# Read back
+state = store._read_state()
+session = state['current_session']
+print(f'tokens:{session["session_tokens"]}')
+print(f'failures:{session["tool_failures"]}')
+print(f'successes:{session["tool_successes"]}')
+"""
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+
+        assert result.returncode == 0, f"Failed: {result.stderr}"
+        assert "tokens:25000" in result.stdout
+        assert "failures:3" in result.stdout
+        assert "successes:12" in result.stdout

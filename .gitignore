@@ -210,3 +210,4 @@ __marimo__/
 .claude/ltm/stats.json
 .claude/ltm/state.json
 .claude/ltm/server.json
+.mcp.json

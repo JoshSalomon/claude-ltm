@@ -39,11 +39,15 @@ from mcp.types import JSONRPCMessage, TextContent, Tool
 from store import MemoryStore, MemoryNotFoundError
 from priority import PriorityCalculator
 from eviction import EvictionManager, EvictionConfig
+from token_counter import TokenCounter
 
 # Initialize server and store
 server = Server("ltm")
 store = MemoryStore()
 priority_calc = PriorityCalculator()
+
+# Initialize token counter with current config (uses offline Xenova tokenizer)
+_token_counter: TokenCounter = TokenCounter(store._read_state().get("config", {}))
 
 # Global shutdown event for server mode
 shutdown_event = asyncio.Event()
@@ -241,6 +245,14 @@ async def list_tools() -> list[Tool]:
                 },
             },
         ),
+        Tool(
+            name="reset_tokens",
+            description="Reset token and tool counts for a fresh start on a new topic.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+            },
+        ),
     ]
 
 
@@ -264,6 +276,8 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
             return await handle_ltm_check(arguments)
         elif name == "ltm_fix":
             return await handle_ltm_fix(arguments)
+        elif name == "reset_tokens":
+            return await handle_reset_tokens(arguments)
         else:
             return [TextContent(type="text", text=f"Unknown tool: {name}")]
     except Exception as e:
@@ -271,16 +285,40 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 
 async def handle_store_memory(args: dict) -> list[TextContent]:
-    """Store a new memory."""
+    """Store a new memory with difficulty calculated from session metrics."""
     topic = args["topic"]
     content = args["content"]
     tags = args.get("tags", [])
     auto_tag = args.get("auto_tag", False)
-    difficulty = args.get("difficulty", 0.5)
+    provided_difficulty = args.get("difficulty")
 
     # Auto-generate tags if requested and no tags provided
     if auto_tag and not tags:
         tags = _extract_tags(topic, content)
+
+    # Get current session state for difficulty calculation
+    state = store._read_state()
+    session = state.get("current_session", {})
+    config = state.get("config", {})
+
+    # Get session metrics for difficulty calculation
+    tool_failures = session.get("tool_failures", 0)
+    tool_successes = session.get("tool_successes", 0)
+    compacted = session.get("compacted", False)
+    session_tokens = session.get("session_tokens", 0)
+    normalize_cap = config.get("token_counting", {}).get("normalize_cap", 100000)
+
+    # Use provided difficulty if given, otherwise calculate from session metrics
+    if provided_difficulty is not None:
+        difficulty = max(0.0, min(1.0, float(provided_difficulty)))
+    else:
+        difficulty = priority_calc.calculate_difficulty(
+            tool_failures=tool_failures,
+            tool_successes=tool_successes,
+            compacted=compacted,
+            session_tokens=session_tokens,
+            token_normalize_cap=normalize_cap,
+        )
 
     memory_id = store.create(
         topic=topic,
@@ -289,10 +327,24 @@ async def handle_store_memory(args: dict) -> list[TextContent]:
         difficulty=difficulty,
     )
 
+    # Reset counters for next memory segment
+    session["session_tokens"] = 0
+    session["tool_failures"] = 0
+    session["tool_successes"] = 0
+    state["current_session"] = session
+    store._write_state(state)
+
     result = {
         "success": True,
         "id": memory_id,
         "message": f"Memory stored successfully with ID: {memory_id}",
+        "difficulty": round(difficulty, 3),
+        "metrics_used": {
+            "tool_failures": tool_failures,
+            "tool_successes": tool_successes,
+            "session_tokens": session_tokens,
+            "compacted": compacted,
+        },
     }
 
     if tags:
@@ -439,6 +491,38 @@ async def handle_ltm_status(args: dict) -> list[TextContent]:
     output += f"- Memories to Load: {config.get('memories_to_load', 10)}\n"
     output += f"- Eviction Batch Size: {config.get('eviction_batch_size', 10)}\n\n"
 
+    # Token counting status
+    session = state.get("current_session", {})
+    tc_config = config.get("token_counting", {})
+    normalize_cap = tc_config.get("normalize_cap", 100000)
+    session_tokens = session.get("session_tokens", 0)
+    tool_failures = session.get("tool_failures", 0)
+    tool_successes = session.get("tool_successes", 0)
+    compacted = session.get("compacted", False)
+
+    # Calculate estimated difficulty with current metrics
+    estimated_difficulty = priority_calc.calculate_difficulty(
+        tool_failures=tool_failures,
+        tool_successes=tool_successes,
+        compacted=compacted,
+        session_tokens=session_tokens,
+        token_normalize_cap=normalize_cap,
+    )
+
+    # Check token counter directly rather than relying on stale session data
+    tc_enabled = _token_counter.is_enabled()
+
+    output += "## Token Counting\n"
+    if tc_enabled:
+        output += "- Status: **Enabled** (offline tokenizer)\n"
+    else:
+        output += "- Status: **Disabled** (config)\n"
+
+    token_pct = (session_tokens / normalize_cap) * 100 if normalize_cap > 0 else 0
+    output += f"- Current segment tokens: {session_tokens:,} ({token_pct:.1f}% of cap)\n"
+    output += f"- Tool calls: {tool_successes} success, {tool_failures} failures\n"
+    output += f"- Estimated difficulty: {estimated_difficulty:.3f}\n\n"
+
     # Show host path if available (passed from run-mcp.sh), otherwise container path
     host_path = os.environ.get("LTM_HOST_PATH", str(store.base_path))
     output += f"**Storage Path:** `{host_path}`\n"
@@ -549,6 +633,54 @@ async def handle_ltm_fix(args: dict) -> list[TextContent]:
     return [TextContent(type="text", text=output)]
 
 
+async def handle_reset_tokens(args: dict) -> list[TextContent]:
+    """Reset token and tool counts for a fresh start on a new topic."""
+    state = store._read_state()
+    session = state.get("current_session", {})
+    config = state.get("config", {})
+    normalize_cap = config.get("token_counting", {}).get("normalize_cap", 100000)
+
+    # Capture "before" state
+    before_tokens = session.get("session_tokens", 0)
+    before_failures = session.get("tool_failures", 0)
+    before_successes = session.get("tool_successes", 0)
+    before_compacted = session.get("compacted", False)
+
+    before_difficulty = priority_calc.calculate_difficulty(
+        tool_failures=before_failures,
+        tool_successes=before_successes,
+        compacted=before_compacted,
+        session_tokens=before_tokens,
+        token_normalize_cap=normalize_cap,
+    )
+
+    # Reset counters
+    session["session_tokens"] = 0
+    session["tool_failures"] = 0
+    session["tool_successes"] = 0
+
+    state["current_session"] = session
+    store._write_state(state)
+
+    # Build output
+    before_pct = (before_tokens / normalize_cap) * 100 if normalize_cap > 0 else 0
+
+    output = "# Token Segment Reset\n\n"
+    output += "## Before\n"
+    output += f"- Tokens: {before_tokens:,} ({before_pct:.1f}% of cap)\n"
+    output += f"- Tool calls: {before_successes} success, {before_failures} failures\n"
+    output += f"- Estimated difficulty: {before_difficulty:.3f}\n\n"
+
+    output += "## After\n"
+    output += "- Tokens: 0 (0.0% of cap)\n"
+    output += "- Tool calls: 0 success, 0 failures\n"
+    output += "- Estimated difficulty: 0.000\n\n"
+
+    output += "**Ready for new topic.**\n"
+
+    return [TextContent(type="text", text=output)]
+
+
 def _format_result(data: dict) -> str:
     """Format a result dict as readable text."""
     lines = []
@@ -569,20 +701,42 @@ async def hook_session_start(request) -> "web.Response":
     """Handle session start hook - load memories and increment session counter."""
     from aiohttp import web
 
+    global _token_counter
+
     try:
         payload = await request.json() if request.can_read_body else {}
     except json.JSONDecodeError:
         payload = {}
 
+    # Extract model from Claude Code payload (passed via stdin to hook)
+    model_from_claude = payload.get("model")
+
     # Load and update state
     state = store._read_state()
     state["session_count"] = state.get("session_count", 0) + 1
-    state["current_session"] = {
+
+    # Initialize current session with token tracking fields
+    session = {
         "started_at": datetime.now(timezone.utc).isoformat(),
         "tool_failures": 0,
         "tool_successes": 0,
         "compacted": False,
+        "session_tokens": 0,
     }
+
+    # Store model in session for reference
+    if model_from_claude:
+        session["model"] = model_from_claude
+
+    state["current_session"] = session
+
+    # Initialize token counter (uses offline Xenova tokenizer)
+    _token_counter = TokenCounter(state.get("config", {}))
+
+    # Store token counting state in session
+    session["token_counting_enabled"] = _token_counter.is_enabled()
+
+    state["current_session"] = session
     store._write_state(state)
 
     # Get configuration
@@ -592,8 +746,22 @@ async def hook_session_start(request) -> "web.Response":
     # Get top memories by priority
     memories = store.list(limit=limit)
 
+    # Build token counting status message
+    if _token_counter.is_enabled():
+        token_msg = "Token counting enabled (offline tokenizer)"
+    else:
+        token_msg = "Token counting disabled (config)"
+
     if not memories:
-        return web.json_response({"success": True, "memories_loaded": 0})
+        return web.json_response({
+            "success": True,
+            "memories_loaded": 0,
+            "model": model_from_claude,
+            "token_counting": {
+                "enabled": _token_counter.is_enabled(),
+                "message": token_msg,
+            },
+        })
 
     # Build context output
     output_lines = []
@@ -623,13 +791,33 @@ async def hook_session_start(request) -> "web.Response":
     return web.json_response({
         "success": True,
         "memories_loaded": len(memories),
+        "model": model_from_claude,
+        "token_counting": {
+            "enabled": _token_counter.is_enabled(),
+            "message": token_msg,
+        },
         "context": "\n".join(output_lines),
     })
 
 
+def _extract_response_text(tool_response: dict) -> str:
+    """Extract text content from tool response for token counting."""
+    # Handle various response formats
+    if "text" in tool_response:
+        return str(tool_response["text"])
+    if "content" in tool_response:
+        return str(tool_response["content"])
+    if "output" in tool_response:
+        return str(tool_response["output"])
+    # Fallback: serialize the whole response
+    return json.dumps(tool_response)
+
+
 async def hook_track_difficulty(request) -> "web.Response":
-    """Handle track difficulty hook - track tool success/failure."""
+    """Handle track difficulty hook - track tool success/failure and count tokens."""
     from aiohttp import web
+
+    global _token_counter
 
     try:
         payload = await request.json() if request.can_read_body else {}
@@ -660,6 +848,13 @@ async def hook_track_difficulty(request) -> "web.Response":
     else:
         session["tool_successes"] = session.get("tool_successes", 0) + 1
 
+    # Count tokens if enabled
+    tokens_counted = 0
+    if _token_counter.is_enabled():
+        response_text = _extract_response_text(tool_response)
+        tokens_counted = _token_counter.count_tokens(response_text)
+        session["session_tokens"] = session.get("session_tokens", 0) + tokens_counted
+
     state["current_session"] = session
     store._write_state(state)
 
@@ -667,6 +862,7 @@ async def hook_track_difficulty(request) -> "web.Response":
         "success": True,
         "tracked": True,
         "is_failure": is_failure,
+        "tokens_counted": tokens_counted,
     })
 
 
@@ -796,6 +992,9 @@ async def run_hooks_http_server(host: str, port: int):
     await site.start()
     print(f"Hooks HTTP server listening on {host}:{port}", file=sys.stderr)
 
+    # Note: server.json is written by run-mcp.sh with the host port
+    # so hooks can connect to the correct mapped port
+
     # Wait for shutdown
     await shutdown_event.wait()
     await runner.cleanup()
@@ -912,14 +1111,28 @@ async def run_server_mode(mcp_port: int, hooks_port: int, host: str = "0.0.0.0")
     )
 
 
-async def main_stdio():  # pragma: no cover
-    """Run the MCP server in stdio mode."""
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            server.create_initialization_options(),
-        )
+async def main_stdio(hooks_port: int | None = None):  # pragma: no cover
+    """Run the MCP server in stdio mode, optionally with HTTP hooks server."""
+    hooks_task = None
+    if hooks_port:
+        # Start hooks HTTP server in background
+        # Use 0.0.0.0 to accept connections from host via container port mapping
+        hooks_task = asyncio.create_task(run_hooks_http_server("0.0.0.0", hooks_port))
+
+    try:
+        async with stdio_server() as (read_stream, write_stream):
+            await server.run(
+                read_stream,
+                write_stream,
+                server.create_initialization_options(),
+            )
+    finally:
+        if hooks_task:
+            hooks_task.cancel()
+            try:
+                await hooks_task
+            except asyncio.CancelledError:
+                pass  # Expected during normal shutdown
 
 
 def parse_args():
@@ -941,6 +1154,11 @@ def parse_args():
         type=int,
         default=9999,
         help="Hooks HTTP port (default: 9999)",
+    )
+    parser.add_argument(
+        "--with-hooks",
+        action="store_true",
+        help="Enable HTTP hooks server in stdio mode (binds to 127.0.0.1)",
     )
     parser.add_argument(
         "--host",
@@ -970,4 +1188,5 @@ if __name__ == "__main__":  # pragma: no cover
     if args.server:
         asyncio.run(run_server_mode(args.mcp_port, args.hooks_port, args.host))
     else:
-        asyncio.run(main_stdio())
+        hooks_port = args.hooks_port if args.with_hooks else None
+        asyncio.run(main_stdio(hooks_port))

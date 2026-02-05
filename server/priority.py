@@ -9,6 +9,15 @@ are evicted first. The formula balances three factors:
 - difficulty: How hard was the task that created this memory (0.0-1.0)
 - recency: How recently was this memory accessed, in sessions (0.0-1.0)
 - frequency: How often is this memory accessed (0.0-1.0)
+
+Difficulty calculation uses two formulas:
+
+With token counting (session_tokens > 0):
+    difficulty = (failure_rate * 0.25) + (tool_count * 0.15) +
+                 (token_usage * 0.35) + (compaction * 0.25)
+
+Without token counting (backward compatible):
+    difficulty = (failure_rate * 0.5) + (tool_count * 0.3) + (compaction * 0.2)
 """
 
 from __future__ import annotations
@@ -85,22 +94,33 @@ class PriorityCalculator:
         access_count = stats.get("access_count", 0)
         return min(1.0, access_count / self.FREQUENCY_CAP)
 
+    # Default token normalization cap
+    DEFAULT_TOKEN_NORMALIZE_CAP = 100000
+
     def calculate_difficulty(
         self,
         tool_failures: int,
         tool_successes: int,
         compacted: bool,
+        session_tokens: int = 0,
+        token_normalize_cap: int = DEFAULT_TOKEN_NORMALIZE_CAP,
     ) -> float:
         """
         Calculate difficulty score from session metrics.
 
-        Formula:
+        When token counting is available (session_tokens > 0), uses new formula:
+            difficulty = (failure_rate * 0.25) + (tool_count_norm * 0.15) +
+                        (token_usage * 0.35) + (compaction * 0.25)
+
+        When token counting is not available (session_tokens == 0), uses old formula:
             difficulty = (failure_rate * 0.5) + (tool_count_norm * 0.3) + (compaction * 0.2)
 
         Args:
             tool_failures: Number of failed tool invocations
             tool_successes: Number of successful tool invocations
             compacted: Whether context compaction occurred
+            session_tokens: Total tokens counted in session (0 = disabled)
+            token_normalize_cap: Maximum tokens for 1.0 score (default: 100000)
 
         Returns:
             Difficulty score between 0.0 and 1.0
@@ -114,14 +134,24 @@ class PriorityCalculator:
             failure_rate = tool_failures / total
             tool_count_norm = min(1.0, total / self.TOOL_COUNT_CAP)
 
-        # compaction_bonus is 1.0 when compacted, contributing 0.2 to difficulty
         compaction_bonus = 1.0 if compacted else 0.0
 
-        difficulty = (
-            failure_rate * 0.5
-            + tool_count_norm * 0.3
-            + compaction_bonus * 0.2
-        )
+        if session_tokens > 0:
+            # New formula with token usage component
+            token_usage_norm = min(1.0, session_tokens / token_normalize_cap)
+            difficulty = (
+                failure_rate * 0.25
+                + tool_count_norm * 0.15
+                + token_usage_norm * 0.35
+                + compaction_bonus * 0.25
+            )
+        else:
+            # Old formula (backward compatible when token counting disabled)
+            difficulty = (
+                failure_rate * 0.5
+                + tool_count_norm * 0.3
+                + compaction_bonus * 0.2
+            )
 
         return max(0.0, min(1.0, difficulty))
 
@@ -143,6 +173,10 @@ def calculate_difficulty(
     tool_failures: int,
     tool_successes: int,
     compacted: bool,
+    session_tokens: int = 0,
+    token_normalize_cap: int = PriorityCalculator.DEFAULT_TOKEN_NORMALIZE_CAP,
 ) -> float:
     """Convenience function for difficulty calculation."""
-    return _calculator.calculate_difficulty(tool_failures, tool_successes, compacted)
+    return _calculator.calculate_difficulty(
+        tool_failures, tool_successes, compacted, session_tokens, token_normalize_cap
+    )

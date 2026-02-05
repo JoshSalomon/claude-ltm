@@ -11,30 +11,30 @@ This document defines the testing strategy for the LTM system, following Test-Dr
 ### Test Framework
 
 - **Framework**: pytest
-- **Location**: `.claude/ltm/tests/`
+- **Location**: `server/tests/`
 - **Naming Convention**: `test_<module>.py`
 
 ### Directory Structure
 
 ```
-.claude/ltm/
-├── tests/
-│   ├── __init__.py
-│   ├── conftest.py              # Shared fixtures
-│   ├── test_store.py            # Unit tests for store.py
-│   ├── test_priority.py         # Unit tests for priority.py
-│   ├── test_eviction.py         # Unit tests for eviction.py
-│   ├── test_mcp_server.py       # Integration tests for MCP server
-│   ├── test_hooks.py            # Integration tests for hooks
-│   ├── test_container.py        # Containerized deployment tests
-│   ├── test_e2e.py              # End-to-end tests
-│   ├── fixtures/
-│   │   ├── memories/            # Sample memory files
-│   │   ├── index.json           # Sample index
-│   │   ├── stats.json           # Sample stats
-│   │   └── state.json           # Sample state
-│   └── scripts/
-│       └── test_container_parity.sh  # Container parity test script
+server/
+├── mcp_server.py                # MCP server implementation
+├── store.py                     # Memory storage
+├── priority.py                  # Priority calculation
+├── eviction.py                  # Phased eviction
+├── token_counter.py             # Token counting for difficulty
+├── requirements.txt             # Server dependencies
+└── tests/
+    ├── __init__.py
+    ├── conftest.py              # Shared fixtures
+    ├── test_store.py            # Unit tests for store.py
+    ├── test_priority.py         # Unit tests for priority.py
+    ├── test_eviction.py         # Unit tests for eviction.py
+    ├── test_token_counter.py    # Unit tests for token_counter.py
+    ├── test_mcp_server.py       # Integration tests for MCP server
+    ├── test_hooks.py            # Integration tests for hooks
+    ├── test_container.py        # Containerized deployment tests
+    └── test_server_mode.py      # Server mode tests
 ```
 
 ---
@@ -169,7 +169,7 @@ Test file: `tests/test_eviction.py`
 |-----------|-------------|-----------------|
 | `test_archive_created_on_phase_1` | Archive on first eviction | Full content saved to archives/ |
 | `test_archive_not_overwritten` | Subsequent evictions | Archive unchanged |
-| `test_archive_path` | Verify archive location | `.claude/ltm/archives/{id}.md` |
+| `test_archive_path` | Verify archive location | `server/archives/{id}.md` |
 
 #### Eviction Trigger
 
@@ -304,7 +304,7 @@ Test file: `tests/test_container.py`
 
 ```bash
 # Build the container
-docker build -t ltm-mcp-server .claude/ltm/
+docker build -t ltm-mcp-server server/
 
 # Verify build
 docker images ltm-mcp-server
@@ -335,10 +335,10 @@ set -e
 
 # Test against local server
 echo "Testing local server..."
-python .claude/ltm/mcp_server.py &
+python server/mcp_server.py &
 LOCAL_PID=$!
 sleep 2
-pytest .claude/ltm/tests/test_mcp_server.py -v
+pytest server/tests/test_mcp_server.py -v
 kill $LOCAL_PID
 
 # Test against containerized server
@@ -347,7 +347,7 @@ docker run -d --name ltm-test \
   -v "$(pwd)/.claude/ltm:/data" \
   ltm-mcp-server
 sleep 2
-LTM_CONTAINER=1 pytest .claude/ltm/tests/test_mcp_server.py -v
+LTM_CONTAINER=1 pytest server/tests/test_mcp_server.py -v
 docker stop ltm-test
 docker rm ltm-test
 
@@ -635,7 +635,7 @@ SESSION_END_PAYLOAD = {
 #### Memory Storage
 
 - [ ] Create memory via "remember this" command
-- [ ] Verify memory file created in `.claude/ltm/memories/`
+- [ ] Verify memory file created in `server/memories/`
 - [ ] Verify index.json updated with new entry
 - [ ] Verify stats.json updated with access data
 - [ ] Verify auto-tagging works when no tags provided
@@ -672,7 +672,7 @@ SESSION_END_PAYLOAD = {
 
 ```bash
 # Register MCP server
-claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
+claude mcp add --transport stdio ltm -- python server/mcp_server.py
 
 # Test each tool interactively
 # In Claude Code session:
@@ -687,21 +687,21 @@ claude mcp add --transport stdio ltm -- python .claude/ltm/mcp_server.py
 
 ```bash
 # Test session_start hook
-echo '{"session_id": "test"}' | python .claude/ltm/hooks/session_start.py
+echo '{"session_id": "test"}' | python server/hooks/session_start.py
 
 # Test track_difficulty hook (success)
 echo '{"tool_name": "Write", "tool_response": {"success": true}}' | \
-  python .claude/ltm/hooks/track_difficulty.py
+  python server/hooks/track_difficulty.py
 
 # Test track_difficulty hook (failure)
 echo '{"tool_name": "Bash", "tool_response": {"error": "failed"}}' | \
-  python .claude/ltm/hooks/track_difficulty.py
+  python server/hooks/track_difficulty.py
 
 # Test pre_compact hook
-echo '{"session_id": "test"}' | python .claude/ltm/hooks/pre_compact.py
+echo '{"session_id": "test"}' | python server/hooks/pre_compact.py
 
 # Test session_end hook
-echo '{"session_id": "test"}' | python .claude/ltm/hooks/session_end.py
+echo '{"session_id": "test"}' | python server/hooks/session_end.py
 ```
 
 ---
@@ -715,43 +715,43 @@ echo '{"session_id": "test"}' | python .claude/ltm/hooks/session_end.py
 pip install pytest pytest-asyncio pytest-cov
 
 # Or with requirements
-pip install -r .claude/ltm/requirements-dev.txt
+pip install -r server/requirements-dev.txt
 ```
 
 ### Run All Tests
 
 ```bash
 # From project root
-pytest .claude/ltm/tests/ -v
+pytest server/tests/ -v
 
 # With coverage
-pytest .claude/ltm/tests/ -v --cov=.claude/ltm --cov-report=html
+pytest server/tests/ -v --cov=server --cov-report=html
 ```
 
 ### Run Specific Test Categories
 
 ```bash
 # Unit tests only
-pytest .claude/ltm/tests/test_store.py .claude/ltm/tests/test_priority.py .claude/ltm/tests/test_eviction.py -v
+pytest server/tests/test_store.py server/tests/test_priority.py server/tests/test_eviction.py -v
 
 # Integration tests only (local)
-pytest .claude/ltm/tests/test_mcp_server.py .claude/ltm/tests/test_hooks.py -v
+pytest server/tests/test_mcp_server.py server/tests/test_hooks.py -v
 
 # Container tests only
-pytest .claude/ltm/tests/test_container.py -v
+pytest server/tests/test_container.py -v
 
 # E2E tests only
-pytest .claude/ltm/tests/test_e2e.py -v
+pytest server/tests/test_e2e.py -v
 
 # Container parity tests (compares local vs containerized)
-bash .claude/ltm/tests/scripts/test_container_parity.sh
+bash server/tests/scripts/test_container_parity.sh
 ```
 
 ### Test in Isolation
 
 ```bash
 # Use temporary directory for test data
-pytest .claude/ltm/tests/ -v --basetemp=/tmp/ltm-test
+pytest server/tests/ -v --basetemp=/tmp/ltm-test
 ```
 
 ---
