@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "ltm": {
+      "command": "bash",
+      "args": ["${CLAUDE_PLUGIN_ROOT}/scripts/run-mcp.sh"],
+      "cwd": "${CLAUDE_PLUGIN_ROOT}"
+    }
+  }
+}

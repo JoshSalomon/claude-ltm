@@ -1,13 +1,11 @@
 {
   "name": "ltm",
   "description": "Long-Term Memory for Claude Code - persistent memory across sessions",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "author": {
     "name": "Josh Salomon"
   },
   "repository": "https://github.com/JoshSalomon/claude-ltm",
   "license": "Apache-2.0",
-  "keywords": ["memory", "mcp", "context", "persistence"],
-  "commands": "./commands/",
-  "mcpServers": "./.mcp.json"
+  "keywords": ["memory", "mcp", "context", "persistence"]
 }
