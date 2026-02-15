@@ -23,8 +23,16 @@ if command -v podman &>/dev/null; then
 elif command -v docker &>/dev/null; then
     RUNTIME="docker"
 else
-    echo "Error: Neither podman nor docker found" >&2
-    exit 1
+    # No container runtime — run MCP server directly via Python
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SERVER_DIR="${SCRIPT_DIR}/../server"
+
+    # Install minimal dependencies (skip transformers — token counting uses char-based fallback)
+    pip install -q --disable-pip-version-check mcp aiohttp 2>/dev/null
+
+    # Run server directly
+    exec python "${SERVER_DIR}/mcp_server.py" \
+        --with-hooks --data-path "${DATA_DIR}" --hooks-port "${HOOKS_PORT}"
 fi
 
 # Use LTM_MCP_IMAGE if set, otherwise default to quay.io latest
