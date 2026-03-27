@@ -76,8 +76,13 @@ if [[ -z "$RUNTIME" ]]; then
         exit 1
     fi
 
-    # Install minimal dependencies (skip transformers — token counting uses char-based fallback)
-    "$PYTHON" -m pip install -q --disable-pip-version-check mcp aiohttp 2>/dev/null
+    # Install minimal dependencies if not already present
+    # (skip transformers — token counting uses char-based fallback)
+    "$PYTHON" -c "import mcp, aiohttp" 2>/dev/null || \
+        "$PYTHON" -m pip install -q --disable-pip-version-check mcp aiohttp || {
+            echo "Error: Failed to install dependencies (mcp, aiohttp)." >&2
+            exit 1
+        }
 
     # Run server directly
     exec "$PYTHON" "${SERVER_DIR}/mcp_server.py" \
