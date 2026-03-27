@@ -77,22 +77,50 @@ if [[ -z "$RUNTIME" ]]; then
     fi
 
     # Use a venv for dependencies (avoids PEP 668 externally-managed-environment errors)
+    # Supports uv (preferred) or pip for venv creation and package installation
     VENV_DIR="${DATA_DIR}/venv"
-    if [[ ! -f "${VENV_DIR}/bin/python" ]]; then
-        "$PYTHON" -m venv "$VENV_DIR" || {
-            echo "Error: Failed to create venv. Install python3-venv (apt install python3-venv)." >&2
+
+    # Check if venv already has working deps — skip setup entirely
+    if ! "${VENV_DIR}/bin/python" -c "import mcp, aiohttp" &>/dev/null; then
+        # Detect package manager: prefer uv, fall back to pip
+        if command -v uv &>/dev/null; then
+            PKG_MGR="uv"
+        elif "$PYTHON" -m pip --version &>/dev/null; then
+            PKG_MGR="pip"
+        else
+            echo "Error: Neither uv nor pip found. Install uv (recommended) or python3-pip." >&2
             exit 1
-        }
+        fi
+
+        # Create venv if missing or broken
+        if [[ ! -f "${VENV_DIR}/bin/python" ]]; then
+            if [[ "$PKG_MGR" == "uv" ]]; then
+                uv venv --python "$PYTHON" "$VENV_DIR" || {
+                    echo "Error: Failed to create venv with uv." >&2
+                    exit 1
+                }
+            else
+                "$PYTHON" -m venv "$VENV_DIR" || {
+                    echo "Error: Failed to create venv. Install python3-venv (apt install python3-venv)." >&2
+                    exit 1
+                }
+            fi
+        fi
+
+        # Install minimal dependencies (skip transformers — token counting uses char-based fallback)
+        if [[ "$PKG_MGR" == "uv" ]]; then
+            uv pip install --python "${VENV_DIR}/bin/python" mcp aiohttp || {
+                echo "Error: Failed to install dependencies with uv." >&2
+                exit 1
+            }
+        else
+            "${VENV_DIR}/bin/python" -m pip install -q --disable-pip-version-check mcp aiohttp || {
+                echo "Error: Failed to install dependencies with pip." >&2
+                exit 1
+            }
+        fi
     fi
     PYTHON="${VENV_DIR}/bin/python"
-
-    # Install minimal dependencies if not already present
-    # (skip transformers — token counting uses char-based fallback)
-    "$PYTHON" -c "import mcp, aiohttp" 2>/dev/null || \
-        "$PYTHON" -m pip install -q --disable-pip-version-check mcp aiohttp || {
-            echo "Error: Failed to install dependencies (mcp, aiohttp)." >&2
-            exit 1
-        }
 
     # Run server directly
     exec "$PYTHON" "${SERVER_DIR}/mcp_server.py" \
