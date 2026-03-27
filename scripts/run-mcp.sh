@@ -76,6 +76,16 @@ if [[ -z "$RUNTIME" ]]; then
         exit 1
     fi
 
+    # Use a venv for dependencies (avoids PEP 668 externally-managed-environment errors)
+    VENV_DIR="${DATA_DIR}/venv"
+    if [[ ! -f "${VENV_DIR}/bin/python" ]]; then
+        "$PYTHON" -m venv "$VENV_DIR" || {
+            echo "Error: Failed to create venv. Install python3-venv (apt install python3-venv)." >&2
+            exit 1
+        }
+    fi
+    PYTHON="${VENV_DIR}/bin/python"
+
     # Install minimal dependencies if not already present
     # (skip transformers — token counting uses char-based fallback)
     "$PYTHON" -c "import mcp, aiohttp" 2>/dev/null || \
