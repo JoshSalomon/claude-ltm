@@ -235,47 +235,43 @@ class TestTokenCounterProperties:
 class TestTokenCounterInitialization:
     """Tests for TokenCounter initialization scenarios."""
 
-    def test_tokenizer_import_error(self):
-        """Handle ImportError when transformers package not installed."""
+    def test_tokenizer_import_error_falls_back_to_char(self):
+        """Falls back to char-based estimation when transformers not installed."""
         from token_counter import TokenCounter
 
         # Create a TokenCounter instance and manually test initialization
         counter = TokenCounter.__new__(TokenCounter)
         counter._config = {}
         counter._tokenizer = None
+        counter._use_char_fallback = False
 
-        # Mock the transformers import to fail
-        with patch.dict("sys.modules", {"transformers": None}):
-            with patch("builtins.__import__") as mock_import:
-                def side_effect(name, *args, **kwargs):
-                    if "transformers" in name:
-                        raise ImportError("No module named 'transformers'")
-                    return __builtins__.__import__(name, *args, **kwargs)
+        # Simulate _TRANSFORMERS_AVAILABLE = False
+        with patch("token_counter._TRANSFORMERS_AVAILABLE", False):
+            result = counter._initialize()
+            assert result is True
+            assert counter._tokenizer is None
+            assert counter._use_char_fallback is True
 
-                mock_import.side_effect = side_effect
-
-                # This tests the initialization path
-                result = counter._initialize()
-                assert result is False
-                assert counter._tokenizer is None
-
-    def test_tokenizer_load_failure(self):
-        """Handle failure when tokenizer cannot load."""
+    def test_tokenizer_load_failure_falls_back_to_char(self):
+        """Falls back to char-based estimation when tokenizer cannot load."""
         from token_counter import TokenCounter
 
         counter = TokenCounter.__new__(TokenCounter)
         counter._config = {}
         counter._tokenizer = None
+        counter._use_char_fallback = False
 
-        # Mock the transformers module
+        # Mock the transformers module to raise on from_pretrained
         mock_transformers = MagicMock()
         mock_transformers.GPT2TokenizerFast.from_pretrained.side_effect = Exception(
             "Failed to load tokenizer"
         )
 
-        with patch.dict("sys.modules", {"transformers": mock_transformers}):
-            result = counter._initialize()
-            assert result is False
+        with patch("token_counter._TRANSFORMERS_AVAILABLE", True):
+            with patch("token_counter.GPT2TokenizerFast", mock_transformers.GPT2TokenizerFast):
+                result = counter._initialize()
+                assert result is True
+                assert counter._use_char_fallback is True
 
     def test_initialization_with_empty_config(self):
         """TokenCounter initializes with empty config."""

@@ -23,12 +23,10 @@ if command -v podman &>/dev/null; then
 elif command -v docker &>/dev/null; then
     RUNTIME="docker"
 else
-    echo "Error: Neither podman nor docker found" >&2
-    exit 1
+    RUNTIME=""
 fi
 
-# Use LTM_MCP_IMAGE if set, otherwise default to quay.io latest
-IMAGE="${LTM_MCP_IMAGE:-quay.io/jsalomon/ltm-mcp-server:latest}"
+# --- Common setup: find port and write server.json for hooks ---
 
 # Find an available port for HTTP hooks
 # This allows multiple LTM instances to run simultaneously
@@ -60,6 +58,36 @@ cleanup() {
     rm -f "$SERVER_JSON" 2>/dev/null
 }
 trap cleanup EXIT
+
+# --- Containerless mode: run MCP server directly via Python ---
+
+if [[ -z "$RUNTIME" ]]; then
+    SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    SERVER_DIR="${SCRIPT_DIR}/../server"
+
+    # Verify Python 3.10+ is available (required by mcp package)
+    PYTHON="$(command -v python3 || command -v python)" || {
+        echo "Error: Python not found. Install Python 3.10+ for containerless mode." >&2
+        exit 1
+    }
+    PY_OK=$("$PYTHON" -c "import sys; print(int(sys.version_info >= (3, 10)))" 2>/dev/null) || PY_OK=0
+    if [[ "$PY_OK" != "1" ]]; then
+        echo "Error: Python 3.10+ required (mcp package). Found: $("$PYTHON" --version 2>&1)" >&2
+        exit 1
+    fi
+
+    # Install minimal dependencies (skip transformers — token counting uses char-based fallback)
+    "$PYTHON" -m pip install -q --disable-pip-version-check mcp aiohttp 2>/dev/null
+
+    # Run server directly
+    exec "$PYTHON" "${SERVER_DIR}/mcp_server.py" \
+        --with-hooks --data-path "${DATA_DIR}" --hooks-port "${HOOKS_PORT}"
+fi
+
+# --- Container mode ---
+
+# Use LTM_MCP_IMAGE if set, otherwise default to quay.io latest
+IMAGE="${LTM_MCP_IMAGE:-quay.io/jsalomon/ltm-mcp-server:latest}"
 
 # Read installed plugins file content (for installed plugin mode)
 PLUGINS_FILE="${HOME}/.claude/plugins/installed_plugins.json"

@@ -42,6 +42,8 @@ from priority import PriorityCalculator
 from eviction import EvictionManager, EvictionConfig
 from token_counter import TokenCounter
 
+VERSION = "0.2.5"
+
 # Initialize server and store
 server = Server("ltm")
 store = MemoryStore()
@@ -61,7 +63,7 @@ def _get_plugin_info() -> dict:
     LTM_PLUGIN_JSON_B64 (development mode) environment variables.
     """
     info = {
-        "version": "unknown",
+        "version": VERSION,
         "scope": "unknown",
         "install_path": "",
         "git_sha": "",
@@ -580,7 +582,10 @@ async def handle_ltm_status(args: dict) -> list[TextContent]:
 
     output += "## Token Counting\n"
     if tc_enabled:
-        output += "- Status: **Enabled** (offline tokenizer)\n"
+        if _token_counter.using_char_fallback:
+            output += "- Status: **Enabled** (char-based estimate)\n"
+        else:
+            output += "- Status: **Enabled** (offline tokenizer)\n"
     else:
         output += "- Status: **Disabled** (config)\n"
 
@@ -814,7 +819,10 @@ async def hook_session_start(request) -> "web.Response":
 
     # Build token counting status message
     if _token_counter.is_enabled():
-        token_msg = "Token counting enabled (offline tokenizer)"
+        if _token_counter.using_char_fallback:
+            token_msg = "Token counting enabled (char-based estimate)"
+        else:
+            token_msg = "Token counting enabled (offline tokenizer)"
     else:
         token_msg = "Token counting disabled (config)"
 

@@ -3,6 +3,9 @@
 Uses the transformers library with GPT2TokenizerFast to load the
 Xenova/claude-tokenizer from Hugging Face for local, deterministic
 token counting. No API credentials required.
+
+When transformers is not installed, falls back to a character-based
+approximation (num_chars / 3.5) for containerless environments.
 """
 
 from __future__ import annotations
@@ -10,6 +13,12 @@ from __future__ import annotations
 import logging
 
 logger = logging.getLogger(__name__)
+
+try:
+    from transformers import GPT2TokenizerFast
+    _TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    _TRANSFORMERS_AVAILABLE = False
 
 
 class TokenCounter:
@@ -28,32 +37,38 @@ class TokenCounter:
         """
         self._config = config or {}
         self._tokenizer = None
+        self._use_char_fallback = False
         self._enabled = self._initialize()
 
     def _initialize(self) -> bool:
-        """Initialize the tokenizer from Hugging Face."""
+        """Initialize the tokenizer from Hugging Face, or fall back to char-based."""
         tc_config = self._config.get("token_counting", {})
         if tc_config.get("enabled") is False:
             return False
 
-        try:
-            from transformers import GPT2TokenizerFast
+        if _TRANSFORMERS_AVAILABLE:
+            try:
+                self._tokenizer = GPT2TokenizerFast.from_pretrained(
+                    "Xenova/claude-tokenizer"
+                )
+                logger.info("Token counting enabled via Xenova/claude-tokenizer")
+                return True
+            except Exception as e:
+                logger.warning(f"Tokenizer initialization failed: {e}")
 
-            self._tokenizer = GPT2TokenizerFast.from_pretrained(
-                "Xenova/claude-tokenizer"
-            )
-            logger.info("Token counting enabled via Xenova/claude-tokenizer")
-            return True
-        except ImportError:
-            logger.warning("transformers package not installed")
-            return False
-        except Exception as e:
-            logger.warning(f"Tokenizer initialization failed: {e}")
-            return False
+        # Fall back to character-based estimation
+        self._use_char_fallback = True
+        logger.info("Token counting enabled via char-based estimate (no transformers)")
+        return True
 
     def is_enabled(self) -> bool:
         """Check if token counting is enabled."""
         return self._enabled
+
+    @property
+    def using_char_fallback(self) -> bool:
+        """Check if using character-based fallback instead of real tokenizer."""
+        return self._use_char_fallback
 
     @property
     def normalize_cap(self) -> int:
@@ -73,6 +88,8 @@ class TokenCounter:
         """
         if not self._enabled or not text:
             return 0
+        if self._use_char_fallback:
+            return int(len(text) / 3.5)
         try:
             return len(self._tokenizer.encode(text))
         except Exception as e:

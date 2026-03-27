@@ -24,7 +24,7 @@ FROM python:3.12-slim
 # Set labels
 LABEL org.opencontainers.image.title="LTM MCP Server"
 LABEL org.opencontainers.image.description="Long-Term Memory MCP Server for Claude Code"
-LABEL org.opencontainers.image.version="0.1.0"
+LABEL org.opencontainers.image.version="0.2.5"
 
 # Set working directory
 WORKDIR /app
