@@ -1138,6 +1138,109 @@ difficulty = (
 
 ---
 
+### FE-7: Runtime Configuration via `/ltm:config`
+
+**Status:** Planned
+
+**Problem:** Changing LTM configuration (e.g., `memories_to_load`, `max_memories`, difficulty weights) requires manually editing `state.json`. This is error-prone and not discoverable.
+
+**Solution:** Add a `/ltm:config` slash command and corresponding MCP tool for viewing and modifying configuration at runtime.
+
+**Commands:**
+
+| Command | Description |
+|---------|-------------|
+| `/ltm:config` | Show current configuration |
+| `/ltm:config <key> <value>` | Set a configuration value |
+| `/ltm:config --reset` | Reset all configuration to defaults |
+
+**Supported configuration keys:**
+
+| Key | Type | Default | Description |
+|-----|------|---------|-------------|
+| `memories_to_load` | int | 10 | Memories loaded at session start |
+| `max_memories` | int | 100 | Total memory limit before eviction |
+| `eviction_batch_size` | int | 10 | Memories evicted per cycle |
+| `token_counting.enabled` | bool | true | Enable/disable token counting |
+| `token_counting.normalize_cap` | int | 100000 | Token cap for 1.0 difficulty score |
+
+**Usage examples:**
+```bash
+# Show current config
+/ltm:config
+
+# Load more memories at session start
+/ltm:config memories_to_load 20
+
+# Increase memory limit
+/ltm:config max_memories 200
+
+# Reset to defaults
+/ltm:config --reset
+```
+
+**MCP tool:**
+```python
+@server.tool()
+async def ltm_config(
+    key: str = None,     # Config key (dot-notation for nested)
+    value: str = None,   # New value (auto-cast to correct type)
+    reset: bool = False  # Reset all to defaults
+) -> dict:
+    """View or modify LTM configuration."""
+```
+
+**Implementation notes:**
+- Changes are persisted to `state.json` immediately
+- Take effect on the next relevant operation (e.g., `memories_to_load` on next session start)
+- Validation prevents invalid values (negative numbers, unknown keys)
+- `/ltm:help` updated to include config commands
+
+---
+
+### FE-8: Hard Delete (Purge) for PII Removal
+
+**Status:** Planned
+
+**Problem:** The current `/ltm:forget` command soft-deletes memories by archiving them before removal. The archived content remains in `.claude/ltm/archives/` and is git-tracked, meaning sensitive data (PII, credentials, proprietary information) persists in the repository even after "deletion." Users need a way to completely remove a memory with no archive left behind.
+
+**Solution:** Add a `--purge` flag to the existing `forget` MCP tool and `/ltm:forget` command that skips archiving and permanently deletes all traces of a memory.
+
+**Updated command:**
+
+| Command | Description |
+|---------|-------------|
+| `/ltm:forget <id>` | Delete a memory (archived for recovery) — existing behavior |
+| `/ltm:forget <id> --purge` | Permanently delete a memory and its archive (no recovery) |
+
+**Updated MCP tool:**
+```python
+# Existing tool, new parameter
+forget(
+    memory_id: str,
+    purge: bool = False  # When true: skip archive, delete archive if exists
+)
+```
+
+**Behavior when `purge=True`:**
+- Removes the memory from `index.json`
+- Deletes `memories/{id}.md`
+- Removes entry from `stats.json`
+- Deletes `archives/{id}.md` if it exists
+- Does **not** archive before deletion
+- Returns confirmation of what was removed
+
+**Git considerations:**
+- Purging removes files from the working tree but not from git history
+- Output should include a reminder: *"File removed. To also remove from git history, use `git filter-repo` or BFG Repo-Cleaner."*
+
+**Implementation notes:**
+- No new MCP tool — extends the existing `forget` tool (addresses TD-2 concerns)
+- Default behavior (`purge=False`) is unchanged — backward compatible
+- `/ltm:help` updated to show `--purge` flag
+
+---
+
 ## 11. Technical Debt
 
 ### TD-1: Tag Index Performance Optimization
